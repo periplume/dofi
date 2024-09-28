@@ -759,9 +759,15 @@ _version () {
 	# get the current version info
 	# TODO extend this to serve dual purpose: version of dofi script and version
 	# of dotdofi file set
+	# first, just the dofi script itself
 	_getVERSION
 	local _currentHASH="${_versionDATA[_currentHASH]}"
 	local _releaseVERSION="${_versionDATA[_releaseVERSION]}"
+	# next, check for developer status
+	_getREPO
+	_dofiLOCAL="${_repoLOCATION[_local]}"
+	_dofiREMOTE="${_repoLOCATION[_remoteHTTPS]}"
+	# for scripting...the -b switch outputs the build hash only
 	if [[ "${_printBUILDHASH:-}" = "true" ]]; then
 		# print the _versionDATA[_currentHASH] value and exit
 		echo "${_currentHASH}"
@@ -777,12 +783,12 @@ _version () {
 		# "versions" this script is behind the canonical and report
 		echo TODO
 	else
-		# print version
+		# print verbose version info
 		echo "dofi : ${_releaseVERSION:-beta} : ${_currentHASH:0:7}"
 		# print canonical source
 		echo "source: https://github.com/periplume/dofi.git"
 		# print commit date
-		[[ ! -z ${_currentHASH:-} ]] && _commitDATE=$(_git show --no-patch --no-notes --pretty='%cd' ${_currentHASH})
+		[[ ! -z ${_currentHASH:-} ]] && _commitDATE=$(git -C "${_dofiLOCAL}" show --no-patch --no-notes --pretty='%cd' ${_currentHASH})
 		echo "commit date: ${_commitDATE:-none}"
 		# if possible, compare with canonical
 		echo "ls-remote comparison"
@@ -796,7 +802,8 @@ declare -A _repoLOCATION
 _getREPO () {
 	# set the local repo path here to complete the developer setup
 	_repoLOCATION[_local]="${HOME}/lab/dofi"
-	_repoLOCATION[_remote]=
+	_repoLOCATION[_remoteHTTPS]="https://github.com/periplume/dofi.git"
+	_repoLOCATION[_remoteSSH]=
 }
 
 _build () {
