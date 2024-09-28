@@ -1,0 +1,1533 @@
+#!/usr/bin/env bash
+# file: dofi
+# description: dotfile manager
+# source: https://github.com/periplume/dofi.git
+# copyright (c) 2024 Jason Lindemuth <jason@bloom.us>
+# licensed under GPL-3.0-or-later
+
+# STRICT (SAFE) SCRIPT AND SHELL SETTINGS
+set -o errexit
+set -o nounset
+set -o pipefail
+IFS=$'\n\t' 
+
+# DEBUG OVERRIDE (uncomment to force enable _DEBUG)
+#_DEBUG=true
+
+# REQUIREMENTS
+hash git || { echo 'ERROR: git is required'; return 1; }
+hash sed || { echo 'ERROR: sed is required'; return 1; }
+
+# DESCRIPTION
+_printDescription () {
+	cat << EOF
+dofi is a single bash script designed to manage user dotfiles using
+the git bare-repo method. it can be used, of course, to bring any
+files under local git control.
+
+the installation and interface is intended for users without prior
+knowledge of git, although it does not preclude expert git users.
+
+for data redundancy, it provides an easy to follow procedure to
+set up a remote repo to which to replicate (github only now).
+
+the code style sacrifices brevity for clarity; it aims to be
+robust, fail-safe and easy to read. it also aims to be 
+self-documenting and self-building. for more info, consult
+the _build() function within.
+
+# inspired by https://news.ycombinator.com/item?id=11070797
+# and https://www.atlassian.com/git/tutorials/dotfiles
+EOF
+}
+
+# USAGE
+_printHelp () {
+	cat << EOF
+usage: dofi [GLOBAL OPTIONS] <command> [COMMAND OPTIONS]
+
+summary: preserve, protect, and revision your personal files
+
+global options:
+ -h       print help
+ -d       print debug messages
+ -v       print version
+
+commands:
+ add <file>       add file to the index
+ remove <file>    remove a file from the working directory
+ save             commit working directory and push to the remote
+ status           print summary of file and syncronization status
+ create           creates empty new local dofi bare repo (HIDE)
+ attach           attach a new remote repo to push to
+ connect          connects and pulls from an existing dofi repo
+ install          installs dofi script and creates local repo
+ version          prints version details
+note: use -h to for specific command options (eg 'attach -h')
+
+note: git commands may be used directly, eg:
+$ dofi git commit -m "custom commit message"
+EOF
+# note: ideal height <24 lines (eg gnome default term size is 24x80)
+}
+
+_printVersionOptions () {
+	cat << EOF
+usage: dofi version [OPTIONS]
+
+summary: print version information
+
+build options:
+ -h               print version usage
+ -c               check for updates
+ -v               verbose
+ -b               print the build hash
+EOF
+}
+
+_printBuildOptions () {
+	# don't show unless env indicates true
+	[[ ! ${_dofiDEVELOPER:-} = "true" ]] && \
+		{ _error "'build' is not valid: consult the source for more info"; exit 1; }
+	cat << EOF
+usage: dofi build [OPTIONS]
+
+summary: perform build of dofi script
+
+build options:
+ -h               print build usage
+ -p               do not push to remote
+ -i               do not install to PATH
+EOF
+}
+
+_printInstallOptions () {
+	cat << EOF
+usage: dofi install [OPTIONS]
+
+summary: copy the script into the designated PATH location
+
+install options:
+ -h               print install usage
+ -b               use ~/bin
+ -l               use ~/.local/bin
+ -u               update PATH in .bashrc
+ -d               do not create local dofi repo (default creates)
+ -s <path>        specify location
+EOF
+}
+
+_printAttachOptions () {
+	cat << EOF
+usage: dofi attach [OPTIONS]
+
+summary: add a remote repo, optionally creates the remote
+on supported git hosting platforms
+
+attach options:
+ -h               print attach usage
+ -p <platform>    remote platform <platform>
+                    [tested platforms: github]
+ -c               create the remote repo
+                    [supported platform: github]
+                    [requires gh cli]
+ -s               use ssh protocol
+                    [default is https]
+ -e               use empty ssh key passphrase
+                    [default is to prompt for a passphrase]
+EOF
+} 
+
+# CONSOLE COLORIZING FUNCTIONS
+# these functions provide (mostly) uniform status messages
+# they take one argument (a string) and are called so:
+# _info "the operation was a success"
+# TODO normalize the ASCII escape code format type
+#
+# use _ask for prompting for y/n and data input (does not newline)
+# use read to read the input in
+# yellow bg and black text -without- newline
+_ask() {
+	printf "\033[38;5;5;48;5;82mUSER\033[0m %s" "$1"
+# note: echo required after read from _ask in order to format 
+# the lines correctly (a minor annoyance I have't fixed)
+}
+# use to call attention to something user must do
+# yellow bg and black text -with- newline 
+_note() {
+	printf "\033[38;5;0;48;5;11mNOTE\033[0m %s\n" "$1"
+}
+# use for high danger prompt
+# red bg with blinking white text
+_danger() {
+	printf "\033[5;97;41mNOTE\033[0m %s\n" "$1"
+}
+# use to report on normal results or activity
+# black bg and green text with newline
+_info() {
+	printf "\033[38;5;2mINFO\033[0m %s\n" "$1"
+}
+# use to warn about unusual but non-fatal results or conditions
+# black bg and yellow text with newline
+_warn() {
+	printf "\033[38;5;11mWARN\033[0m %s\n" "$1"
+}
+# use to report details of fatal errors
+# black bg and bold red text with newline
+_error() {
+	printf "\033[38;5;9mERROR\033[0m %s\n" "$1"
+}
+# use to print detailed debug statements (when _DEBUG=true)
+# black bg and cyan text with newline
+_debug() {
+	[ ${_DEBUG:-false} = "false" ] || printf "\033[38;5;6mDEBUG\033[0m %s\n" "$1"
+}
+
+# these functions are used to add color to text based on data type, eg:
+# _ask "enter path [$(_fmt path "${_pathname}")] "
+# will format the variable $_pathname into yellow text on black bg
+_fmt() {
+	# arg 1 = specify the kind of thing to format
+	# arg 2 = the string to be formatted (must be "quoted message")
+	# print a path in yellow
+	[[ $1 = "path" ]] && printf "\033[93;40m%s\033[0m\n" "$2"
+	# print an email address in yellow
+	[[ $1 = "email" ]] && printf "\033[38;5;11m%s\033[0m\n" "$2"
+	# print a command name in green
+	[[ $1 = "cmd" ]] && printf "\033[38;5;2m%s\033[0m\n" "$2"
+	# print an url in bright cyan
+	[[ $1 = "url" ]] && printf "\033[38;5;87m%s\033[0m\n" "$2"
+	# print white text on green bg (eg like a github.com button)
+	[[ $1 = "button" ]] && printf "\033[97;42m%s\033[0m\n" "$2"
+	# print black text on a grey background (eg like keyboard keys)
+	[[ $1 = "key" ]] && printf "\033[30;47m%s\033[0m\n" "$2"
+	# print bright magenta text for special names
+	[[ $1 = "name" ]] && printf "\033[1;95;40m%s\033[0m\n" "$2"
+}
+
+# PARAMETER PROCESSING
+_getOpts () {
+	 # preserve and export the initial positional parameters
+	export _allParams="${@}"
+	local OPTIND
+	while getopts ":hvd" flag ; do
+		case ${flag} in
+			h)
+				_printHelp; exit 0
+				;;
+			v)
+				# a hacky method to short-circuit normal initialization
+				_subCommandParams=
+				_setEnv; _version; exit 0
+				;;
+			d)
+				_DEBUG=true
+				_debug "enabled debug messages"
+				;;
+			?)
+				_error "invalid global option: -${OPTARG}"; exit 1
+				;;
+		esac
+	done
+	# reset positional parameters before reading the subcommand 
+	shift $((OPTIND - 1)); OPTIND=1
+	# preserve and export the subcommand with its parameters
+	export _subCommandParams="${@}"
+	# look for the subcommand and read its options
+	while ((${#})); do
+		case ${1} in
+			help)
+				_printHelp; exit 0
+				;;
+			version)
+				_subCommand=$1; shift
+				while getopts ":hcvb" flag; do
+					case ${flag} in
+						h)
+							_printVersionOptions; exit 0
+							;;
+						c)
+							_versionCHECK=true
+							;;
+						v)
+							_versionVERBOSE=true
+							;;
+						b)
+							_printBUILDHASH=true
+							;;
+					esac
+				done
+				return
+				;;
+			tig)
+				_subCommand=$1; shift
+				return
+				;;
+			add)
+				_subCommand=$1; shift
+				return
+				;;
+			remove)
+				_subCommand=$1; shift
+				return
+				;;
+			save)
+				_subCommand=$1; shift
+				return
+				;;
+			status)
+				_subCommand=$1; shift
+				while getopts ":v" flag; do
+					case ${flag} in
+						v)
+							_statusVERBOSE=true
+							;;
+					esac
+				done
+				return
+				;;
+			install)
+				_subCommand=$1; shift
+				while getopts ":hbluds:" flag; do
+ 					case ${flag} in
+						h)
+							_printInstallOptions; exit 0
+							;;
+						b)
+							_useHOMEBIN=true
+							;;
+						l)
+							_useDOTLOCALBIN=true
+							;;
+						u)
+							_updatePATH=true
+							;;
+						d)
+							_createDOFI=false
+							;;
+						B)
+							# developer build function (unpublished option)
+							_build=true
+							_createDOFI=false
+							;;
+						s)
+							# -s option argument (OPTARG) must not be a flag
+							if [ "${OPTARG:0:1}" = "-" ] ; then
+								_error "'${_subCommand} -${flag}' requires an argument that is not a flag '${OPTARG}'"
+								_printInstallOptions; exit 1
+							fi
+							_usePATH="${OPTARG}"
+							_debug "intent: use path '${_usePATH}'"
+							;;
+						:)
+							_error "'${_subCommand} -${OPTARG}' requires an argument"
+							_printInstallOptions; exit 1
+							;;
+						\?)
+							_error "unknown option '-${OPTARG}'"
+							_printInstallOptions; exit 1
+							;;
+					esac
+				done
+				# discard the processed options
+				shift $((OPTIND-1))
+				# now check for "help" or other spurious arguments
+				if [[ ! -z ${1:-} ]]; then
+					_warn "spurious argument: ${1}"
+					_printInstallOptions; exit 1
+				fi
+				return
+				;;
+			attach)
+				_subCommand=$1; shift
+				while getopts ":hp:cse" flag; do
+					case ${flag} in
+						h)
+							_printAttachOptions; exit 0
+							;;
+						p)
+							# the remote platform
+							# -p option argument (OPTARG) must not be a flag
+							if [ "${OPTARG:0:1}" = "-" ] ; then
+								_error "-p requires an argument that is not a flag '${OPTARG}'"
+								_printAttachOptions; exit 1
+							fi
+							_remotePLATFORM="${OPTARG}"
+							_debug "intent: attach remote '${_remotePLATFORM}'"
+							;;
+						c)
+							# create the remote repo
+							_debug "intent: create the remote repo (_attachCreate=true)"
+							_attachCreate=true
+							;;
+						s)
+							# use ssh (instead of the default https)
+							_debug "intent: use ssh protocol (_useSSH=true)"
+							_useSSH=true
+							;;
+						e)
+							_debug "intent: disable ssh key passphrase option (_sshPassphrase=false)"
+							_sshPassphrase=false
+							;;
+						:)
+							_error "'${_subCommand} -${OPTARG}' requires an argument"
+							_printAttachOptions; exit 1
+							;;
+						\?)
+							_error "unknown option '-${OPTARG}'"
+							_printAttachOptions; exit 1
+							;;
+					esac
+				done
+				# discard the processed options
+				shift $((OPTIND-1))
+				# now check for "help" or other spurious arguments
+				if [[ ! -z ${1:-} ]]; then
+					_warn "spurious argument: ${1}"
+					_printAttachOptions; exit 1
+				fi
+				return
+				;;
+			build)
+				_subCommand=$1; shift
+				while getopts ":hpi" flag; do
+					case ${flag} in
+						h)
+							_printBuildOptions; exit 0
+							;;
+						p)
+							_buildPUSH=false
+							;;
+						i)
+							_doINSTALL=false
+							;;
+					esac
+				done
+				return
+				;;
+			create)
+				# HIDDEN option
+				_subCommand=$1; shift
+				return
+				;;
+			connect)
+				_subCommand=$1; shift
+				return
+				;;
+			git)
+				# set the git passthrough switch true
+				_gitPASSTHROUGH=true
+				# the subcommand is 'git' and will execute _git
+				_subCommand=$1
+				shift
+				# collect all the parameters (commands) after git
+				_gitCommand=("${@}")
+				# notice we use an array to avoid quoting problems
+				_debug "the subcommand is a raw ${_subCommand} command"
+				_debug "the git command is [${_gitCommand}]"
+				return
+				;;
+			*)
+				_error "'${1}' is not a recognized command; run 'dofi help' for usage"
+				exit 1
+				;;
+		esac
+		shift
+	done
+}
+
+# SUBCOMMAND FUNCTIONS
+
+_tig () {
+	tig -C "${_DOFIHOME}"
+	# TODO give two options, to examine the git repo (for dev) and to examine the
+	# dotdofi
+}
+
+_add () {
+	_file=$1
+	_git add $_file
+}
+
+# print status info
+_status () {
+	if [ -d "${_DOFIHOME}" ]; then
+		_info "dofi is installed in ${_DOFIHOME}"
+	else
+		_error "dofi is not installed"
+	fi
+	if [[ ${_statusVERBOSE:-} = "true" ]]; then
+		_info "created by: $(_git --no-pager log -1 --pretty=format:%an%n)"
+		_info "created: $(_git --no-pager log -1 --pretty=format:%cr%n)"
+		_info "created on: $(_git --no-pager log -1 --pretty=format:%cD%n)"
+		_info "current time: $(date)"
+		_info "genesis signature: $(cat ${_DOFIHOME}/description)"
+		_info "tracked files: $(_git ls-files | grep -v 'README.md' | wc -l) (excluding README.md)"
+		_info "commit count: $(_git rev-list --count HEAD)"
+		_info "object count: $(_git count-objects --human)"
+		_info "current branch: $(_git rev-parse --abbrev-ref HEAD)"
+		_info "branch count: $(_git --no-pager branch | wc -l)"
+	fi
+}
+
+# ATTACH a remote
+_attach () {
+	# main entry for attach
+	# to be run -after- create
+	# attach an empty remote repo on <platform>
+	# add as a remote for push and pull
+	# optionally, create the remote repo first
+	# creates ssh keys and github authentication tokens
+	#
+	# if there is no local yet, warn, offer to create, or exit
+	if [ ! -d "${_DOFIHOME}" ]; then
+	 	_warn "${_DOFIHOME} does not exist"
+		_ask "create now? [y/n] "
+		read -rn1 _yn
+		if [[ ${_yn} = "n" ]]; then
+			_info "run 'dofi create' first"; exit 1
+		elif [[ ${_yn} = "y" ]]; then
+			dofi create >/dev/null 2>&1 || { _error "failed"; exit 1; }
+			echo
+		fi
+	fi
+	# set the proper hostname
+	case ${_remotePLATFORM} in
+		github)
+			# set the proper hostname
+			_remoteHOST="github.com"
+			;;
+		dummy)
+			_remoteHOST="dummy.com"
+			;;
+	esac
+	# get the remote user name
+	_ask "enter the user name for $(_fmt name ${_remotePLATFORM}): "
+	read -re _remoteUSERNAME
+	if [[ -z ${_remoteUSERNAME} ]]; then
+		echo; _error "username required to set up ${_remotePLATFORM}"
+			exit 1
+	fi
+	# set the git url
+	if [[ ${_useSSH:-} = true ]]; then
+		# set the url for ssh
+		_dofiREMOTE="git@${_remoteHOST}:${_remoteUSERNAME}/dofi.git"
+		_info "git ssh url: $(_fmt url git@${_remoteHOST}/${_remoteUSERNAME}/dofi.git)"
+	else
+		# set the url for https
+		_dofiREMOTE="https://${_remoteHOST}/${_remoteUSERNAME}/dofi.git"
+		_info "git https url: https://${_remoteHOST}/${_remoteUSERNAME}/dofi.git"
+	fi
+	# if _attachCreate=true, check if the desired platform is supported
+	if [[ ${_attachCreate:-} = "true" ]]; then
+		_debug "running _attachCreate"
+		_attachCreate || { _error "_attachCreate failed"; exit 1; }
+	fi
+}
+
+# create a remote to attach
+_attachCreate () {
+	# create the remote repo
+	# the list of supported platforms for create
+	local _supportedPlatforms=( github dummy )
+	# check if the specified platform is supported
+	if [[ " ${_supportedPlatforms[*]} " =~ (^|[[:space:]])${_remotePLATFORM}($|[[:space:]]) ]]; then
+		_info "remote platform $(_fmt name ${_remotePLATFORM}) is supported"
+	else
+		_warn "supported platforms include: $(printf '%s ' ${_supportedPlatforms[@]})"
+		_error "remote $(_fmt name ${_remotePLATFORM}) is NOT a supported platform for create"
+		_printAttachOptions; exit 1
+	fi
+	# make sure we have the required cli commands
+	case ${_remotePLATFORM} in
+		github)
+			_debug "checking for github 'gh' cli tool"
+			if ! hash gh 2>/dev/null; then
+			 	_warn "github cli 'gh' is missing and required"
+				_ask "install github cli? [y/n]"
+				read -rsn1 _yn
+      	if [[ ${_yn} = "n" ]]; then
+					echo # have not figured out how to structure this to avoid having to use echo
+					_warn "see: https://github.com/cli/cli/blob/trunk/docs/install_linux.md"
+					_error "github cli required for create (-c) function of attach"
+					exit 1
+				elif [[ ${_yn} = "y" ]]; then
+					echo # have not figured out how to structure this to avoid having to use echo
+					_checkSudo || { _warn "sudo required to install github cli;" exit 1; }
+					_installGithubCLI || { _error "gh install failed"; exit 1; }
+				else
+					echo; _error "aborted"
+				fi
+			else
+				_debug "github cli ($(gh --version | head -1)) is in the path"
+			fi
+			;;
+		dummy)
+			_error "dummy is a placeholder"
+			exit 1
+			;;
+		*)
+			_debug "${_remotePLATFORM} is not supported"; exit 1
+			;;
+	esac
+	# run the designated create function
+	if [[ ${_useSSH:-} = true ]]; then
+		_createSSH || { _error "_createSSH failed"; return 1; }
+	else
+		_createHTTPS || { _error "https create failed"; return 1; }
+	fi
+}
+
+# sub-routine for create for ssh
+_createSSH () {
+	_debug "checking for ssh-agent"
+	_checkSSHAgent || { _error "we rely on ssh-agent for key management"; exit 1; }
+	_debug "generating ssh keys; _sshPassphrase=${_sshPassphrase:-false}"
+	_generateSSHKeys || { _error "user aborted new key generation"; exit 1; }
+	_debug "new ssh keys generated successfully"
+	_debug "private (secret) key: ${_privKEYPATH}"
+	_debug "public key: ${_pubKEYPATH}"
+	# add the keys to the ssh-agent now
+	_debug "adding the new ssh keys to the ssh-agent"
+	ssh-add "${_privKEYPATH}" >/dev/null 2>&1
+	if [ $? = 0 ]; then
+		_info "new ssh keys successfully added to ssh-agent"
+	else
+		_error "keys were not added successfully, aborting"
+		return 1
+	fi
+	_info "testing ssh connection to ${_remoteHOST}"
+	# test for known host first...populate .ssh/known_hosts if necessary
+	if [ -z "$(ssh-keygen -F ${_remoteHOST} >/dev/null 2>&1)" ]; then
+		_debug "not a known host, adding it to known_hosts file now"
+		ssh-keyscan -H ${_remoteHOST} >> ~/.ssh/known_hosts 2>/dev/null
+		_sshScan=$?
+		if [[ $_sshScan = 0 ]]; then
+			_debug "'ssh-keyscan -H ${_remoteHOST}' succeeded; known_hosts updated"
+		else
+			_warn "'ssh-keyscan -H ${_remoteHOST}' failed"
+			return 1
+		fi
+	fi
+	_info "ssh connection to ${_remoteHOST} is available"
+	# try to clip for easy paste
+	if _clip "${_pubKEYPATH}"; then
+		_keyClipped=true
+		_note "the key has been copied into the clipboard"
+	else
+		# cannot use any clipboard facillity, instruct user manually
+		_note "you must now use a browser to add your public key to $(_fmt url ${_remoteHOST})"
+		_note "public key: $(_fmt path ${_pubKEYPATH})"
+	fi
+	_note "now paste the ssh public key into $(_fmt url ${_remoteHOST})"
+	# print help function for while loop
+	_printPasteHelp () {
+		_note "for detailed steps, press $(_fmt key 'h') for help"
+		_note "to view the public key in this terminal, press $(_fmt key 'p') to print"
+		_note "press $(_fmt key 't') to test if the key has been added successfully"
+		_ask "to abort this operation, press $(_fmt key a) : "
+	}
+	# test SSH connection function for while loop
+	_testSSH () {
+		_info "testing ssh connectivity and authentication to ${_remoteHOST}"
+		ssh -T git@github.com >/dev/null 2>&1
+		_testResult=$?
+		if [ ${_testResult} = 1 ]; then
+			_info "ssh test to ${_remoteHOST} SUCCESS with code '${_testResult}'"
+			return
+		else
+			_error "ssh test to ${_remoteHOST} FAILED with error code '${_testResult}'"
+			_note "did you add the key to ${_remoteHOST}?"
+			return 1
+		fi
+	}
+	_printPasteHelp
+	while read -rsn1 _confirm; do
+		if [ "${_confirm:-}" = "a" ]; then
+			echo; _warn "user aborted"
+			_note "the ssh keys were created and left in place"
+			return 1
+		elif [ "${_confirm:-}" = "h" ]; then
+			echo
+			_note "first, log on to your $(_fmt url ${_remoteHOST}) account"
+			_note "next, click top right profile icon, then click Settings"
+			_note "click 'SSH and GPG Keys' link on left"
+			_note "click green button: $(_fmt button 'New SSH Key')"
+			_note "give it a meaningful title, such as corresponds to the key name:"
+			_note "  $(_fmt path ${_privKEYNAME})"
+			_note "paste the 'Authentication' key into the 'Key' dialog box"
+			_note "finally, press the green button: $(_fmt button 'Add SSH Key')"	
+			_note "to view the key in this terminal, press $(_fmt key 'p') to print"
+			_note "press $(_fmt key 't') to test if the key has been added successfully"
+			_ask "to abort this operation, press $(_fmt key a) : "
+		elif [ "${_confirm:-}" = "p" ]; then
+			echo; cat "${_pubKEYPATH}"
+			_info "copy and paste this key ^^^ above into $(_fmt url ${_remoteHOST})" 
+			_ask "press $(_fmt key t) to test if the authentication key has been added "
+		elif [ "${_confirm:-}" = "t" ]; then
+			echo
+			_testSSH && break
+		fi
+	done
+	_info "success, the ssh key is working"
+	# next we must create an authentication token and add it to the github
+	_info "next we must generate an authentication token"
+	# cli authentication setup
+	_note "first, log on to your $(_fmt url ${_remoteHOST}) account"
+	_note "next, click top right profile icon, then click Settings"
+	_note "click 'Developer Settings' link on the bottom left"
+	_note "click 'Personal access tokens' link on the bottom left"
+	_note "select 'Tokens (classic)' and then click the 'Generate new token' button"
+	_note "select 'Generate new token (classic)'"
+	_note "give it a name that corresponds to the ssh public key:"	
+	_note "  $(_fmt path dofi-${_USERNAME}-${_selfHOST}-${_remotePLATFORM}-${_remoteUSERNAME})"
+	_note "change the 'Expiration' to 'No expiration'"
+	_note "select the 'repo' group"
+	_note "select the 'admin:org' group"
+	_note "press the $(_fmt button 'Generate token') button"
+	_note "copy the token to the clipboard and..."
+	# clever method from https://stackoverflow.com/questions/1923435
+	prompt=$(_ask "paste token here: ")
+	unset _pat
+	while IFS= read -p "$prompt" -r -s -n1 char; do
+		if [[ $char == $'\0' ]]; then
+			break
+		fi
+		prompt='*'
+		_pat+="$char"
+	done
+	echo "${_pat}" | gh auth login -p ssh -h github.com --with-token
+	gh auth status
+	#gh repo create --license "GPL-3.0" --public -d dofi-created dofi
+	# using the --license flag puts LICENSE in master (not main) and fucks things
+	# up
+	# TODO consider using master???
+	# or alternately, upload a license file by hane once
+	gh repo create --public -d "$(cat ${_DOFIHOME}/description)" dofi
+	_git remote add remote-primary ${_dofiREMOTE}
+	_git push --set-upstream remote-primary main
+	_git push -u remote-primary
+	exit 0
+}
+
+# sub-routine for create for https
+_createHTTPS () {
+	echo TODO
+}
+
+
+# TODO
+# use a double commit for the dofi file (build)
+# commit the file, then take the commit hash and add it to the dofi file
+# then commit
+# the hash^ refers to the commit prior
+# the hash.. refers to the commit after
+# we have a commit for dofi, and its hash
+# which we put in file and commit
+# thus, the file 'hash^' refers to the "release version"
+# and to get the file with the correct version inside the file
+# we use 'hash..'
+# trying to discard all 1.0.fuckallv54 "semantic" versioning bs
+
+# version and reference
+# 1. ability to check this file against the canonical one
+# this file is added to the user's own dofi repo as the first commit
+# thus, it becomes its own source
+# thus its version is its own commit hash
+# thus, to compare it with the canonical source, we use git
+# when installed, we commit it, then grab the commit hash
+# and then update a marker with the genesis commit hash
+# and commit that...so to validate the file we check against the second commit
+# if that matches the marker, the file is unmodified
+# if it does not match, the file has been modified
+# we can check the same with git status as well
+# complex...perhaps too complex...but trying to avoid any "v1.2.blah" BS
+# and use git mechanisms to manage the concept of versions
+#
+# but for the masses...we will add a 'build -r' for release
+# this shall increment an integer by 1 (ie v1, v2...v247...etc)
+# within which each may have multiple commit hashes
+
+# here we store the version info in an assoc array
+declare -A _versionDATA
+_getVERSION () {
+_versionDATA[_currentHASH]=bb03a7b09441e9413cb48e0a463ae8a01566dc16
+_versionDATA[_releaseVERSION]=
+}
+
+_version () {
+	# get the current version info
+	# TODO extend this to serve dual purpose: version of dofi script and version
+	# of dotdofi file set
+	_getVERSION
+	local _currentHASH="${_versionDATA[_currentHASH]}"
+	local _releaseVERSION="${_versionDATA[_releaseVERSION]}"
+	if [[ "${_printBUILDHASH:-}" = "true" ]]; then
+		# print the _versionDATA[_currentHASH] value and exit
+		echo "${_currentHASH}"
+		exit
+	fi
+	# only print the currentVERSION hash if verbose is not true
+	if [[ ${_versionVERBOSE:-} != "true" ]]; then
+		echo "dofi : ${_releaseVERSION:-beta} : ${_currentHASH:0:7}"
+	elif [[ ${_versionCHECK:-} = "true" ]]; then
+		# compare _currentVERSION with canonical "hash.."
+		# if match, version is current
+		# if no match, check for last common ancestor and compute how many
+		# "versions" this script is behind the canonical and report
+		echo TODO
+	else
+		# print version
+		echo "dofi : ${_releaseVERSION:-beta} : ${_currentHASH:0:7}"
+		# print canonical source
+		echo "source: https://github.com/periplume/dofi.git"
+		# print commit date
+		[[ ! -z ${_currentHASH:-} ]] && _commitDATE=$(_git show --no-patch --no-notes --pretty='%cd' ${_currentHASH})
+		echo "commit date: ${_commitDATE:-none}"
+		# if possible, compare with canonical
+		echo "ls-remote comparison"
+		echo "listed remotes"
+	fi
+	return
+}
+
+# here we store the developer repo location
+declare -A _repoLOCATION
+_getREPO () {
+	# set the local repo path here to complete the developer setup
+	_repoLOCATION[_local]="${HOME}/lab/dofi"
+	_repoLOCATION[_remote]=
+}
+
+_build () {
+	# developer feature (requires env var: _dofiDEVELOPER=true)
+	# read the local repo location in (set it in _repoLOCATION[_local]=
+	# within the _getREPO function)
+	_getREPO
+	_dofiREPO="${_repoLOCATION[_local]}"
+	# get the full path to the instance in the PATH
+	local _existingDOFI=$(command -v dofi)
+	# define the full path to the development instance in the repo working dir
+	local _dofiDEV="${_dofiREPO}/dofi"
+	# define the path to the README.md
+	local _dofiREADME="${_dofiREPO}/README.md"
+	# option parameters:
+	#	-p	_buildPUSH=false
+	#	-i	_doINSTALL=false
+	# this function commits the dofi script to the local dofi repo
+	# then pulls that commit <hash>
+	# then replaces the _versionDATA[_currentHASH]= within the _getVERSION func
+	#   _versionDATA[_currentHASH]=<hash>  (this is the dofi "version")
+	# TODO then generates a README.md tailored for github.com (public facing)
+	#  incl: description, installation, supported (tested) platforms
+	#  incl: build version (release.hash) and how to check (hash.. i think will
+	#  refer forward
+	#  followed by the usage info
+	# TODO then adds the new README.md
+	# then adds and commits the dofi script with the "version" embedded
+	# TODO then installs the file into the PATH
+	# NOTE: in order to obfuscate this function from regular users
+	#  (thereby preventing unnecessary confusion or worse, it does not show
+	#  in usage UNLESS the user has added '_dofiDEVELOPER=true' to his
+	#  environment (ie exported in .bashrc)
+	# TODO ideally, use vim to alert me / report on dofi development
+	# TODO add release
+	# TODO add switch for 'do not install'
+	# TODO add shellcheck
+	# don't run this function unless user has explicitly enabled DEVELOPER mode
+	[[ ! ${_dofiDEVELOPER:-} = "true" ]] && \
+		{ _error "'build' is not valid: read the source for more info"; exit 1; }
+	# determine what script is running
+	if [[ "${_selfABSOLUTE}" = "${_dofiDEV}" ]]; then
+		_debug "build: running from the dev instance"
+		_buildFROM=dev
+	elif [[ "${_selfABSOLUTE}" = "${_existingDOFI}" ]]; then
+		_warn "build: running from the installed instance"
+		_buildFROM=installed
+	else
+		_warn "build: running from neither installed nor dev instance"
+		_error "run build from installed instance in path or dev instance only"
+		exit 1
+	fi
+	# make sure _dofiREPO is a repo
+	if git -C "${_dofiREPO}" rev-parse >/dev/null 2>&1; then
+		_debug "build: '${_dofiREPO}' is the live git repo"
+		# make sure _dofiDEV exists
+		[ -e "${_dofiDEV}" ] || { _error "missing '${_dofiDEV}'"; exit 1; }
+	else
+		_debug "build: '${_dofiREPO}' is not a git repo"
+		_error "'${_dofiREPO}' is not a git repo"
+		exit 1
+	fi
+	#
+	# check that there is an existing dofi in the PATH
+	[ ! -e "${_existingDOFI:-}" ] && { _error "no dofi in the path; use 'install' first"; exit 1; }
+	# check if _dofiDEV is newer than _existingDOFI (to prevent changes if
+	# _existingDOFI is the file being changed...it does happen)
+	if cmp --silent "${_dofiDEV}" "${_existingDOFI}"; then
+		_debug "'${_dofiDEV}' and '${_existingDOFI}' are identical"
+		_doINSTALL=false
+	else
+		if [[ "${_existingDOFI}" -nt "${_dofiDEV}" ]]; then
+			_warn "'${_existingDOFI}' is newer than '${_dofiDEV}'"
+			_error "bad practice, or mistake?"
+			exit 1
+		fi
+	fi
+	# finally check if the _dofiDEV file has changed since the last commit
+	if git -C "${_dofiREPO}" diff --quiet --exit-code "${_dofiDEV}"; then
+		_error "'${_dofiDEV}' has not changed"
+		# unless this is brand new...in which case, add it manually
+		exit 1
+	else
+		_debug "changes in '${_dofiDEV}' detected, proceeding"
+	fi
+	# everthing should be in order now
+	# warnings...since we are changing the live file!!
+	_warn "BEGIN: dofi build process"
+	_danger "the file '${_dofiDEV}' is about to change...beware"
+	_warn "modification of dev instance will follow commit, followed by another commit"
+	_ask "type 'ok' and hit enter when ready "
+	read _ok
+	[[ ! ${_ok} = "ok" ]] && { _error "build process aborted"; exit 1; }
+	# add the file to staging and commit
+	_debug "adding and commiting phase-1 '${_dofiDEV}'"
+	git -C "${_dofiREPO}" add "${_dofiDEV}"
+	git -C "${_dofiREPO}" commit -q -m "[dofi] commit phase-1" >/dev/null 2>&1
+	_returnGITCOMMIT1=$?
+	if [[ ! ${_returnGITCOMMIT1} = 0 ]]; then
+		# git commit failed
+		_debug "command 'git -C ${_dofiREPO} commit' failed"
+		_warn "git commit failed, likely because there were no changes to commit"
+		_error "cannot commit unchanged files"
+		exit 1
+	fi
+	# get the hash for the phase-1 commit
+	_newHASH=$(git -C "${_dofiREPO}" rev-parse HEAD)
+	_debug "_newHASH=${_newHASH}"
+	# read the current version values in
+	# TODO if running from the installed version, this won't work
+	_debug "_buildFROM=${_buildFROM}"
+	# TODO if running from the installed version, use 'version -b' to get the
+	# currentHASH, otherwise, use the _getVERSION func
+	# wait, do we care...we are not preserving the hash any more
+	#_getVERSION
+	#local _currentHASH="${_versionDATA[_currentHASH]}"
+	#_debug "_currentHASH=${_currentHASH:-beta}"
+	_debug "updating ${_dofiDEV} with new version tag now"
+	_debug "updating _currentHASH with '$_newHASH'"
+	key="_versionDATA\[_currentHASH\]"
+	hash="${_newHASH}"
+	# sorry, sed makes this trivial
+	# define the function line within which the _versionDATA array exists
+	f="_getVERSION () {"    # to keep sed a reasonable length 
+	sed -i '/'$f'/,/^}/!b;s/^[[:space:]]*'$key'=.*$/'$key'='$hash'/' "${_dofiDEV}"
+	# TODO work around the use of sed please
+	# next, generate a new README.md file tailored for github public facing
+	_buildREADME "${_dofiREADME}"
+	# then add this new README.md file to the staging index
+	git -C "${_dofiREPO}" add "${_dofiREADME}"
+	# then generates a README.md tailored for github.com (public facing)
+	#  incl: description, installation, supported (tested) platforms
+	#  incl: build version (release.hash) and how to check (hash.. i think will
+	#  refer forward
+	#  followed by the usage info
+	# then adds the new README.md
+	# then adds and commits the dofi script with the "version" embedded
+	# finally, we can commit phase 2, which commits the dofi file with its hash
+	# version tags embedded within
+	# TODO then installs the file into the PATH
+	# TODO push to the remote
+	_debug "adding and commiting phase-2 '${_dofiDEV}'"
+	git -C "${_dofiREPO}" add "${_dofiDEV}"
+	git -C "${_dofiREPO}" commit -q -m "[dofi] commit phase-2"
+	_returnGITCOMMIT2=$?
+	if [[ ${_returnGITCOMMIT2} = 0 ]]; then
+		_info "build: success"
+	else
+		_warn "build: failed"
+	fi
+	# next push the changes to the repo (unless _buildPUSH=false)
+	if [[ "${_buildPUSH:-}" = "false" ]]; then
+		_debug "user specified not to push to the remote"
+	else
+		_debug "push to remote is true"
+		echo "TODO check if there is a remote, if so, push"
+	fi
+	# finally install the new dofi into the path
+	# we must check whether this has been run from the installed live dofi in the
+	# path or the dev dofi in the repo. if the former, we exec out and call
+	# _install from the repo version
+	# we also must check whether: _doINSTALL=false
+	# in which case the user has purposely requested not to install into the path
+	if [[ ! "${_doINSTALL:-}" = "false" ]]; then
+		# check if the executing script is the live one or the dev one
+		if [[ "${_buildFROM}" = "installed" ]]; then
+			_debug "now using exec to call install from the dev instance because you're lazy"
+			#if _debug is true insert the -d flag
+			[[ "${_DEBUG:-}" = "true" ]] && _debug=("-d") || _debug=()
+			exec "${_dofiDEV}" "${_debug[@]}" install -s "${_existingDOFI}"
+			# TODO test paths with a space in them
+			echo "you will not get the pleasure of seeing 'INFO: dofi build complete'"
+		elif [[ "${_buildFROM}" = "dev" ]]; then
+			_debug "good practice, build from the dev version, well done"
+			cp "${_dofiDEV}" "${_existingDOFI}"
+			_info "installed new version to path"
+		fi
+	fi
+	_info "dofi build complete"
+}
+
+_buildREADME () {
+	# takes one mandatory arg: full path to the README.md file
+	[[ -z "${1}" ]] && return 1
+	local _README=${1}
+	# uses mktemp if no path was given
+	# produce a nice markdown README suitable for github
+	# TODO: can i make a public README.md with
+	#  - description
+	#  - installation
+	#  - support
+	#  - usage
+	# first add the description, installation, and support info
+	cat >"${_README}" <<'EOF'
+## dofi: dotfile manager
+
+dofi takes the git out of bare-repo dotfile management
+- a bash script with minimal dependencies (said sorry)
+- automates the creation of the local dotfile repo
+- automates and assists with the creation and connection to a remote repo
+- friendly and easy introduction to dotfile management with git
+- hides complexity at the expense of brevity (intentional design)
+- attempts to be robust, clean, clear, and reusable code
+- solves a simple problem: keep my stuff safe without hassle
+
+---
+### installation
+using curl
+```
+curl https://raw.githubusercontent.com/periplume/dofi/refs/heads/main/dofi
+chmod +x dofi
+./dofi install
+```
+using git to clone the dofi repo
+```
+git clone https://github.com/periplume/dofi.git
+cd dofi; ./dofi install
+```
+---
+### support
+tested on ubuntu 24.01.01
+---
+### usage
+EOF
+# TODO next include the usage pages
+# TODO finally include the build hash info and release
+}
+
+# create a local repo function
+_create () {
+	#  TODO
+	#  create should add the dofi script to the repo
+	#  the sequence:
+	#  add the README first and make the first commit
+	#  add the commit hash from the first as version to dofi script
+	#  commit that file...thus the dofi script has a hash as version
+	#  two kinds:
+	#  1. user install: add to the script the source hash (default)
+	#  2. developer build: add to the latest script the hash (-b build)
+	#  i fear i am over-complicating this...but lets see
+	#  break README into _makeREADME func
+	#  we want a user README to be useful to the user
+	#  we want the public git repo README useful to the potential user
+	# TODO
+	# install should create a README depending on
+	# 1. a build...readme should include install instructions
+	# 2. a user...readme should include description and basic instructions/usage
+	#
+	# create a new dofi local bare repo for dotfiles
+	# use "main" as the initial branch
+	# first check that there is no such repo
+	[ -d "${_DOFIHOME}" ] && { _warn "${_DOFIHOME} already exists"; exit 1; }
+	# first work out git user name and email
+	if [ -e "$HOME/.gitconfig" ]; then
+		# user has a git config file, we will check it for NAME and EMAIL
+		_debug "user has a config file"
+  	# determine user's full name and email from git if possible
+  	git config --global --get user.name 1>/dev/null \
+		&& _gitUSERFULLNAME=$(git config --global --get user.name)
+		git config  --global --get user.email 1>/dev/null \
+    && _gitUSEREMAIL=$(git config --global --get user.email)
+		# in case we got nothing, do our best
+		[ -z "${_gitUSEREMAIL:-}" ] && _gitUSEREMAIL="unknown"
+		[ -z "${_gitUSERFULLNAME:-}" ] && _gitUSERFULLNAME=$USER
+	else
+		# user has no git config file
+		_debug "user has no gitconfig file...we must ask for details"
+		# first try for the user full name from /etc/passwd
+		_userRecord="$(getent passwd $USER)"
+		_userGecosField="$(echo "$_userRecord" | cut -d ':' -f 5)"
+		_userFullName="$(echo "$_userGecosField" | cut -d ',' -f 1)"
+		if [[ -z ${_userFullName:-} ]]; then
+			_gitUSERFULLNAME="$USER"
+		else
+			_gitUSERFULLNAME="${_userFullName}"
+		fi
+		_ask "enter preferred (full) user name [$(_fmt name ${_gitUSERFULLNAME})] "
+		read _preferredNAME
+		[ -z ${_preferredNAME} ] || _gitUSERFULLNAME=${_preferredNAME}
+		_gitUSEREMAIL=unknown
+		_ask "enter user email [$(_fmt name ${_gitUSEREMAIL})] "
+		read _preferredEMAIL
+		[ -z ${_preferredEMAIL} ] || _gitUSEREMAIL=${_preferredEMAIL}
+		# now create a gitconfig
+		git config --global user.name "${_gitUSERFULLNAME}"
+		git config --global user.email "${_gitUSEREMAIL}"
+	fi
+	# initialize the bare repo
+	git init --bare --initial-branch=main "${_DOFIHOME}" 1>/dev/null
+	# disable file tracking (in this repo only)
+	_git config --local status.showUntrackedFiles no
+	# put the usage info into README.md surrounded by backticks to render as code
+	echo '```' > "${HOME}/README.md"
+	_printHelp >> "${HOME}/README.md"
+	echo '```' >> "${HOME}/README.md"
+	echo '---' >> "${HOME}/README.md"
+	echo '```' >> "${HOME}/README.md"
+	_printAttachOptions >> "${HOME}/README.md"
+	echo '```' >> "${HOME}/README.md"
+	# TODO add this script in $HOME/bin/ or .local/bin/
+	# add and make first commit
+	_git add "${HOME}/README.md"
+	_git commit -q -m "[genesis] dofi repo created by ${_USERNAME}"
+	# finally, put the "installed" marker in the git description file
+	_gitInitial=$(_git rev-parse --short --verify main)
+	_time=$(date +%s)
+	printf "dofi:${_USERNAME}:${_time}:${_gitInitial}\n" > "${_DOFIHOME}/description"
+}
+
+# install the script into user path
+_install () {
+	# assume the script has been downloaded to $HOME somewhere
+	# pipe install not allowed (nor can this file be sourced)
+	#
+	# also prevent _dofiDEVELOPER=true to run this (use 'build')
+	#[[ ${_dofiDEVELOPER:-} = "true" ]] && \
+	#	{ _error "_dofiDEVELOPER=true: use 'build'"; exit 1; }
+	# set up all the various paths, etc	
+	local _installPATH
+	local _installPATHBASE
+	_debug "_usePATH=${_usePATH:-unset}"
+	_debug "_useDOTLOCALBIN=${_useDOTLOCALBIN:-unset}"
+	_debug "_useHOMEBIN=${_useHOMEBIN:-unset}"
+	_debug "_updatePATH=${_updatePATH:-unset}"
+	# determine intent first, then determine conditions and actions
+	_installFROM=${_selfABSOLUTE}
+	_debug "intent: install from self '${_installFROM}'"
+	# if _usePATH is not empty, read _usePATH value provided
+	if [[ ! -z ${_usePATH:-} ]]; then
+		if [[ $(basename ${_usePATH}) = "dofi" ]]; then
+			# user specified the FULL path (we assume)
+			_installPATH=${_usePATH}
+			_debug "intent: install as '${_installPATH}'"
+		elif [[ "${_usePATH: -1}" = "/" ]]; then
+			# user added trailing '/' signifying a dir
+			_installPATH="${_usePATH}dofi"
+			_debug "intent: install as '${_installPATH}'"
+		else
+			# user specified a basedir (without trailing '/')
+			_installPATH="${_usePATH}/dofi"
+			_debug "intent: install as '${_installPATH}'"
+		fi
+	# if _useDOTLOCALBIN is true, just use _useDOTLOCALBIN
+	elif [[ ${_useDOTLOCALBIN:-} = "true" ]]; then
+		_installPATH="$HOME/.local/bin/dofi"
+		_debug "intent: install as '${_installPATH}'"
+	# if _useHOMEBIN is true and _useDOTLOCAL is unset, use _useHOMEBIN
+	elif [[ ${_useHOMEBIN:-} = "true" ]] && [[ ${_useDOTLOCALBIN:-false} = "false" ]]; then
+		_installPATH="$HOME/bin/dofi"
+		_debug "intent: install as '${_installPATH}'"
+	# if _useHOMEBIN and _useDOTLOCAL are both unset, use _useDOTLOCAL
+	# set to _installPATH=undefined and work it out
+	elif [[ ${_useHOMEBIN:-false} == "false" ]] && [[ ${_useDOTLOCALBIN:-false} = "false" ]]; then
+		#_installPATH="$HOME/.local/bin/dofi"
+		#_debug "intent: install as '${_installPATH}'"
+		_installPATH=undefined
+		_debug "intent: install location undefined"
+	fi
+	# check if an instance of dofi is already in the PATH somewhere
+	# which allows us to determine the destination
+	if ! hash dofi 2>/dev/null; then
+		# no dofi in the PATH
+		_seeDOFI=false
+		_debug "condition: dofi is not in the current PATH"
+		_doCOPY=true
+		if [[ "${_installPATH}" = "undefined" ]]; then
+			_installPATH="$HOME/.local/bin/dofi"
+			_debug "condition: install at preferred '${_installPATH}'"
+		else
+			_debug "condition: install at designated: '${_installPATH}'"
+		fi
+	else
+		# there is an existing dofi in the PATH
+		_seeDOFI=true
+		_debug "condition: dofi is already in the PATH"
+		_existingDOFI=$(command -v dofi)
+		_debug "condition: dofi exists here: '${_existingDOFI}'"
+		if [[ ${_installPATH} = "undefined" ]]; then
+			# this is an UPGRADE and user did not specify the destination
+			_debug "condition: upgrade"
+			_installPATH=${_existingDOFI}
+		elif [[ ${_installPATH} != ${_existingDOFI} ]]; then
+			# user specified a different destination, will not do this
+			_debug "condition: attempting to add second copy to PATH"
+			_warn "dofi already exists at '${_existingDOFI}'"
+			_warn "attempting to install second instance at '${_installPATH}'"
+			_warn "remove existing or modify destination location"
+			_error "multiple instances not allowed"
+			exit 1
+		else
+			# user's intent matches the condition
+			_debug "condition: '${_installPATH}' matches the existing '${_existingDOFI}'"
+		fi
+	fi
+	# check if this file is attempting to replace itself
+	if [[ ${_selfABSOLUTE} = ${_installPATH} ]]; then
+		_error "cannot replace self with self"
+		_error "are you sure you are editing/executing the correct file?"
+		exit 1
+	fi
+	# now set _installPATHBASE and check directory space
+	_installPATHBASE=$(dirname ${_installPATH})
+	_debug "condition: install in base dir '${_installPATHBASE}'"
+	# examine the intended path
+	# is the given path relative or absolute
+	if [ "${_installPATHBASE}" != "${_installPATHBASE#/}" ]; then
+	 	_debug "condition: given path '${_installPATHBASE}' is absolute"
+	else
+		# resolve into an absolute path
+	 	_debug "condition: given path '${_installPATHBASE}' is relative"
+		_debug "condition: given path is relative to '$PWD'"
+		_installPATH="$PWD/${_installPATH}"
+		_installPATHBASE="$PWD/${_installPATHBASE}"
+		_debug "condition: converted base path to absolute '${_installPATHBASE}'"
+		_debug "condition: converted path to absolute '${_installPATH}'"
+	fi
+	# update PATH?
+	if [[ ${_updatePATH:-unset} = "true" ]]; then
+		_debug "condition: update PATH with '${_installPATHBASE}'"
+	else
+		_debug "condition: do not update PATH"
+	fi
+	# next validate the conditions of the environment given the intent
+	# validate the existence of the intended base path
+	if [[ -d ${_installPATHBASE} ]]; then
+		_debug "condition: base dir '${_installPATHBASE}' already exists"
+		_doMKDIR=false
+	else
+		# base path does not exist
+		_debug "condition: '${_installPATHBASE}' does not exist"
+		_doMKDIR=true
+	fi
+	# check if desired BASE is already in the PATH
+	if [[ ":$PATH:" == *":${_installPATHBASE}:"* ]]; then
+		_debug "condition: PATH already includes '${_installPATHBASE}'"
+		_needPATH=false
+	else
+		_debug "condition: current PATH does not include '${_installPATHBASE}'"
+		_needPATH=true
+	fi
+	# check if the existing file matches the intended destination
+	if [[ ${_installPATH} = ${_existingDOFI:-} ]]; then
+		_debug "condition: attempting to replace existing dofi"
+		# check if this file differs from the one it intends to replace
+		if cmp --silent "${_selfABSOLUTE}" "${_installPATH}"; then
+			_debug "condition: files are identical"
+			_doCOPY=false
+		else
+			_debug "condition: files are NOT identical"
+		if [[ ${_selfABSOLUTE} -nt ${_installPATH} ]]; then
+			_debug "condtion: '${_selfABSOLUTE}' is newer than '${_installPATH}'"
+			_doCOPY=true
+			else
+				_warn "'${_selfABSOLUTE}' is OLDER than '${_installPATH}'"
+				_doCOPY=false
+			fi
+		fi
+	fi
+	# finally check if ~/.dofi exists, if so, we won't create
+	[ -d "${_DOFIHOME}" ] && { _debug "${_DOFIHOME} already exists"; _createDOFI=false; }
+	# what to do now
+	_debug "_seeDOFI=${_seeDOFI}"
+	_debug "_doMKDIR=${_doMKDIR}"
+	_debug "_doCOPY=${_doCOPY:-unset}"
+	_debug "_needPATH=${_needPATH}"
+	if [[ ${_doCOPY} = "false" ]]; then
+		_info "nothing to do"
+		exit
+	else
+		if [[ ${_doMKDIR} = "true" ]]; then
+			# make sure the entire mkdir path can be created
+			# function to determine if mkdir will work
+			_mkdirTEST () {
+				local dir="$1"
+				while [ ! -d "$dir" ]; do
+					dir=$(dirname "$dir")
+				done
+				if [ ! -w "$dir" ]; then
+					_warn "no write permissions in '$dir'"
+					return 1
+				fi
+			}
+			if _mkdirTEST "${_installPATHBASE}"; then
+				_debug "can 'mkdir -p' '${_installPATHBASE}'"
+			else
+				_warn "write permissions do not permit 'mkdir -p ${_installPATHBASE}'"
+				_warn "check the path and/or the permissions"
+				_error "failed to make '${_installPATHBASE}'"
+				exit 1
+			fi
+		else
+			_debug "no need to make a new dir"
+		fi
+		_debug "mkdir and copy now"
+		# we are now fairly certain these will work
+		# make the directory and copy the file
+		mkdir -p "${_installPATHBASE}"
+		cp "${_selfABSOLUTE}" "${_installPATH}"
+		_info "new dofi file installed"
+	fi
+	# now do the PATH work
+	if [[ ${_needPATH} = "true" ]] && [[ ${_updatePATH} = "true" ]]; then
+		_debug "adding '${_installPATHBASE}' to PATH now"
+		export PATH=$PATH:${_installPATHBASE}
+		_debug "adding '${_installPATHBASE}' to '$HOME/.bashrc' now"
+		echo "export PATH=$PATH:${_installPATHBASE}" >> "$HOME/.bashrc"
+		_warn "to use dofi, you will need to log off/on to reload PATH..."
+		_warn "or source the modified bashrc: 'source ~/.bashrc'"
+	elif [[ ${_needPATH} = "true" ]] && [[ ${_updatePATH} = "false" ]]; then
+		_warn "you must add '${_installPATHBASE}' to your PATH to use 'dofi'"
+	fi
+	# now run 'dofi create' if there is no dofi
+	if [[ ${_createDOFI:-} = "false" ]]; then
+		_debug "skipping dofi create; all done with install"
+		exit 0
+	else
+		_debug "now create the dofi local repo"
+		# for our purposes, we use ABSOLUTEPATH because we can
+		${_installPATH} create
+	fi
+}
+
+# HELPER FUNCTIONS
+
+# install the github cli
+_installGithubCLI () {
+	# install routine from:
+	# https://github.com/cli/cli/blob/trunk/docs/install_linux.md
+	(type -p wget >/dev/null || (sudo apt update && sudo apt-get install wget -y)) \
+	&& sudo mkdir -p -m 755 /etc/apt/keyrings \
+	&& wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+	&& sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+	&& sudo apt update \
+	&& sudo apt install gh -y
+}
+
+# check for ssh-agent
+_checkSSHAgent () {
+	# validate that ssh-agent is running; start if not
+	# TODO do not muck with ssh-agent, warn and exit instead
+	# ssh-agent is a hot mess with its startup requirements
+	# besides, a user's security is his own business
+	timeout .3s ssh-add -l &>/dev/null
+	if [ "$?" == 2 ]; then
+		# ssh-agent isn't running; start it
+		_warn "no ssh-agent running; start ssh-agent as follows:"
+		_warn '# eval $(ssh-agent -s)' #note the use of single quotes here
+		return 1
+		# the whack method ssh-agent requires to start
+		#eval $(ssh-agent -s)
+		# for the pid we use $SSH_AGENT_PID
+		#_debug "ssh-agent started as PID '${SSH_AGENT_PID}'"
+	fi
+}
+
+# ssh-keygen wrapper
+_generateSSHKeys () {
+	# create unique ssh keypair for dofi authentication to _remotePLATFORM
+	# we use the comment to identify the key clearly...long, but unambiguous
+	# check for existing keys...and stop if they exst
+	_privKEYNAME="dofi-${_USERNAME}-${_selfHOST}-${_remotePLATFORM}-${_remoteUSERNAME}"
+	_privKEYPATH="$HOME/.ssh/$_privKEYNAME"
+	_pubKEYNAME="dofi-${_USERNAME}-${_selfHOST}-${_remotePLATFORM}-${_remoteUSERNAME}.pub"
+	_pubKEYPATH="$HOME/.ssh/$_pubKEYNAME"
+	if [ -e ${_privKEYPATH} ]; then
+		_warn "key $(_fmt path ${_privKEYNAME}) already exists"
+		_ask "replace keys? [y/n] "
+		while read -rsn1 _yn; do
+			if [[ ${_yn} = "y" ]]; then
+				echo
+				_danger "replacing the keys cannot be undone!"
+				read -r -p "$(_ask "type $(_fmt key indeed) to proceed") " _response
+				if [[ ${_response:-} = "indeed" ]]; then
+					rm "${_pubKEYPATH}"
+					rm "${_privKEYPATH}"
+					_info "deleted keypair ${_privKEYNAME}"
+					break
+				else
+					_warn "cannot proceed with '${_response}'"
+					_warn "keypair $(_fmt path ${_privKEYNAME}) not removed"
+					return 1
+				fi
+			elif [[ ${_yn} = "n" ]]; then
+				echo
+				_warn "remove $(_fmt path ${_privKEYNAME}) keypair and try again"
+				return 1
+			fi
+		done
+	fi
+	# generate new keys
+	if [[ ${_sshPassphrase:-} = false ]]; then
+		ssh-keygen -t ed25519 -N '' -q -C "${_privKEYNAME}" -f "${_privKEYPATH}" &
+		_sshkeygenPID=$!
+		_debug "waiting for ssh-keygen (pid:${_sshkeygenPID}) to complete"
+		wait ${_sshkeygenPID}
+	else
+		_debug "tty is $(tty)"
+		_debug "unsetting DISPLAY; ssh-add tries to use DISPLAY instead...stupid"
+		DISPLAY=
+		ssh-keygen -t ed25519 -q -C "${_privKEYNAME}" -f "${_privKEYPATH}" &
+		_sshkeygenPID=$!
+		_debug "waiting for ssh-keygen (pid:${_sshkeygenPID}) to complete"
+		wait ${_sshkeygenPID}
+	fi
+}
+
+# check for sudo privileges
+_checkSudo() {
+	# (heuristic, but not exhaustive)
+	# return 0 if they seem to exist (an active session)
+	# return 1 if user has sudo privileges (but inactive session)
+	# return 2 if user has no sudo privileges
+	local _sudoReturnCode
+	local _errorCode
+	_debug "checking for sudo privileges"
+	# first try sudo -n with any command...if this returns zero, we are good
+	sudo -n date >/dev/null 2>&1
+	_sudoReturnCode=$?
+	_debug "'sudo -n date' returned ${_sudoReturnCode}"
+	# if this returns zero, we return 0
+	[ $_sudoReturnCode = 0 ] && return 0
+	_debug "no active sudo session detected"
+	_debug "testing for sudoers privileges"
+	# next use sudo -v, which returns 1 if user is not a valid sudoer
+	# we use timeout to kill sudo -v...then capture the timeout return code
+	timeout --foreground -k .2 .2 sudo -S -v > /dev/null 2>&1
+	_errorCode=$?
+	# now match timeout exit code accordingly
+	if [[ $_errorCode = 1 ]]; then
+		# sudo returned 1, ie user is not in sudoers file
+		_warn "user has no sudo privileges"
+		return 1
+	elif [[ $_errorCode = 124 ]]; then
+		# user is in sudoers file (but session is inactive)
+		_warn "user has sudo privileges; however session is inactive"
+		return 0
+	else
+		# some other error
+		_warn "unexpected error; 'timeout -k .2 .2 sudo -S -v' returned $_errorCode"
+		return 1
+	fi
+}
+
+# clip to allow easy paste with web browser
+_clip() {
+	# modified version of clip() from https://git.zx2c4.com/password-store/
+	# copy the public key file into the clipboard (if possible)
+	local _file=$1
+  if [[ -n ${WAYLAND_DISPLAY:-} ]]; then
+    local clip_cmd=( wl-copy )
+    local paste_cmd=( wl-paste -n )
+    if [[ ${X_SELECTION:-} == primary ]]; then
+      clip_cmd+=( --primary )
+      paste_cmd+=( --primary )
+    fi
+  elif [[ -n ${DISPLAY:-} ]]; then
+    local clip_cmd=( xclip -selection "${X_SELECTION:-}" )
+    local paste_cmd=( xclip -o -selection "${X_SELECTION:-}" )
+	else
+		_warn "no clipboard mechanism detected"
+		return 1
+	fi
+	# we have a clipboard facility
+	cat "${_pubKEYPATH}" | $clip_cmd
+	_debug "public key copied to clipboard"
+}
+
+
+# git wrapper and passthrough
+_git () {
+	# check if this is a raw git command (ie 'dofi git <etc>')
+	if [[ ${_gitPASSTHROUGH:-} = true ]]; then
+		_debug "git command is: '${_gitCommand[@]}'"
+		# notice we use an array for the git args...quoting problems before
+		git --git-dir="${_DOFIHOME}" --work-tree="${_USERHOME}" "${_gitCommand[@]}"
+	else
+		# otherwise, this is how the script calls git using _git
+		git --git-dir="${_DOFIHOME}" --work-tree="${_USERHOME}" "${@}"
+	fi
+}
+
+# run after positional parameters are processed and before subcommands
+_setEnv () {
+	# set straight the environment details
+	_selfNAME=$(basename "${BASH_SOURCE[0]}")
+	_selfABSOLUTE=$(readlink -f "${BASH_SOURCE[0]}")
+	_selfBASE=$(dirname "${_selfABSOLUTE}")
+	_selfCALL=${0}
+	_selfPWD=$(pwd)
+	_selfHOST=$(hostname)
+	_USERHOME=${HOME}
+	_USERNAME=$(whoami)
+	_DOFIHOME="${_USERHOME}/.dofi"
+	if [[ "${_dofiDEVELOPER:-}" = "true" ]]; then
+		# read the array _repoLOCATION within the _getREPO function and then export
+		# this as _dofiREPO so that _build can pass it through exec for the
+		# self-installing feature
+		_getREPO
+		export _dofiREPO="${_repoLOCATION[_local]}"
+	fi
+	# TODO include _dofiREPO if _dofiDEVELOPER=true
+	# print the environment details in _DEBUG mode
+	_debug "$(declare -p _selfNAME)"
+	_debug "$(declare -p _selfABSOLUTE)"
+	_debug "$(declare -p _selfBASE)"
+	_debug "$(declare -p _selfCALL)"
+	_debug "$(declare -p _selfPWD)"
+	_debug "$(declare -p _selfHOST)"
+	_debug "$(declare -p _USERHOME)"
+	_debug "$(declare -p _USERNAME)"
+	_debug "$(declare -p _DOFIHOME)"
+	_debug "$(declare -p _dofiDEVELOPER)"
+	_debug "$(declare -p _dofiREPO)"
+	# print the positional parameters
+	_debug "$(declare -p _allParams)"
+	_debug "$(declare -p _subCommandParams)"
+}
+
+# the main entry point
+main () {
+	# read the positional parameters
+	_getOpts "${@}"
+	# set the environment accordingly
+	_setEnv
+	# print help if no positional parameters found
+	[[ -z ${_subCommand:-} ]] && { _printHelp; exit 0; }
+	# execute the subCommand
+	[[ -n ${_subCommand:-} ]] && eval _${_subCommandParams} || _error "unexpected error '$?'"
+}
+# prevent this file from being sourced, but warn instead of panic
+(return 0 2>/dev/null) && { _error "dofi cannot be sourced"; return; }
+# run the main() function
+main "${@}"
