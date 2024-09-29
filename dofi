@@ -815,13 +815,13 @@ _getREPO () {
 	# set the local repo path here to complete the developer setup
 	_repoLOCATION[_local]="${HOME}/lab/dofi"
 	_repoLOCATION[_remoteHTTPS]="https://github.com/periplume/dofi.git"
-	_repoLOCATION[_remoteSSH]=
+	_repoLOCATION[_remoteSSH]="git@github.com:periplume/dofi.dit"
 }
 
 _build () {
 	# developer feature (requires env var: _dofiDEVELOPER=true)
-	# read the local repo location in (set it in _repoLOCATION[_local]=
-	# within the _getREPO function)
+	# read the local repo location in
+	# (set in _repoLOCATION[_local]= within the _getREPO function)
 	_getREPO
 	_dofiREPO="${_repoLOCATION[_local]}"
 	# get the full path to the instance in the PATH
