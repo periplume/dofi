@@ -54,15 +54,15 @@ global options:
  -v       print version
 
 commands:
- add <file>       add file to the index
- remove <file>    remove a file from the working directory
- save             commit working directory and push to the remote
+ add <file>       add file to the dotfile repo
+ remove <file>    remove a file from the repo
+ save             commit and push to the remote
  status           print summary of file and syncronization status
  create           creates empty new local dofi bare repo (HIDE)
  attach           attach a new remote repo to push to
  connect          connects and pulls from an existing dofi repo
  install          installs dofi script and creates local repo
- version          prints version details
+ version          prints script version details
 note: use -h to for specific command options (eg 'attach -h')
 
 note: git commands may be used directly, eg:
@@ -109,10 +109,10 @@ summary: copy the script into the designated PATH location
 
 install options:
  -h               print install usage
+ -l               use ~/.local/bin              [default]
  -b               use ~/bin
- -l               use ~/.local/bin
- -u               update PATH in .bashrc
- -d               do not create local dofi repo (default creates)
+ -u               update PATH in .bashrc        [default reports only]
+ -d               do not create local dofi repo [default creates]
  -s <path>        specify location
 EOF
 }
@@ -135,6 +135,8 @@ attach options:
                     [default is https]
  -e               use empty ssh key passphrase
                     [default is to prompt for a passphrase]
+ -n <name>        specify the remote repo name
+                    [default is 'dotdofi']
 EOF
 } 
 
@@ -221,7 +223,8 @@ _getOpts () {
 				_setEnv; _version; exit 0
 				;;
 			d)
-				_DEBUG=true
+				# we always want this to propagate
+				export _DEBUG=true
 				_debug "enabled debug messages"
 				;;
 			?)
@@ -340,13 +343,13 @@ _getOpts () {
 				;;
 			attach)
 				_subCommand=$1; shift
-				while getopts ":hp:cse" flag; do
+				while getopts ":hp:n:cse" flag; do
 					case ${flag} in
 						h)
 							_printAttachOptions; exit 0
 							;;
 						p)
-							# the remote platform
+							# the remote platform (required)
 							# -p option argument (OPTARG) must not be a flag
 							if [ "${OPTARG:0:1}" = "-" ] ; then
 								_error "-p requires an argument that is not a flag '${OPTARG}'"
@@ -354,6 +357,16 @@ _getOpts () {
 							fi
 							_remotePLATFORM="${OPTARG}"
 							_debug "intent: attach remote '${_remotePLATFORM}'"
+							;;
+						n)
+							# alternate name for remote repo name
+							# -n option argument (OPTARG) must not be a flag
+							if [ "${OPTARG:0:1}" = "-" ] ; then
+								_error "-n requires an argument that is not a flag '${OPTARG}'"
+								_printAttachOptions; exit 1
+							fi
+							_remoteNAME="${OPTARG}"
+							_debug "intent: attach remote name: '${_remoteNAME}'"
 							;;
 						c)
 							# create the remote repo
@@ -406,7 +419,6 @@ _getOpts () {
 				return
 				;;
 			create)
-				# HIDDEN option
 				_subCommand=$1; shift
 				return
 				;;
@@ -479,6 +491,8 @@ _attach () {
 	# optionally, create the remote repo first
 	# creates ssh keys and github authentication tokens
 	#
+	# set the remote name first
+	local _remoteNAME="${_remoteNAME:-dotdofi}"
 	# if there is no local yet, warn, offer to create, or exit
 	if [ ! -d "${_DOFIHOME}" ]; then
 	 	_warn "${_DOFIHOME} does not exist"
@@ -491,6 +505,8 @@ _attach () {
 			echo
 		fi
 	fi
+	# make sure remote has been specified
+	[[ -z "${_remotePLATFORM:-}" ]] && { _error "remote platform must be specified"; exit 1; }
 	# set the proper hostname
 	case ${_remotePLATFORM} in
 		github)
@@ -511,12 +527,12 @@ _attach () {
 	# set the git url
 	if [[ ${_useSSH:-} = true ]]; then
 		# set the url for ssh
-		_dofiREMOTE="git@${_remoteHOST}:${_remoteUSERNAME}/dofi.git"
-		_info "git ssh url: $(_fmt url git@${_remoteHOST}/${_remoteUSERNAME}/dofi.git)"
+		_dofiREMOTE="git@${_remoteHOST}:${_remoteUSERNAME}/${_remoteNAME}.git"
+		_info "git ssh url: $(_fmt url git@${_remoteHOST}/${_remoteUSERNAME}/${_remoteNAME}.git)"
 	else
 		# set the url for https
-		_dofiREMOTE="https://${_remoteHOST}/${_remoteUSERNAME}/dofi.git"
-		_info "git https url: https://${_remoteHOST}/${_remoteUSERNAME}/dofi.git"
+		_dofiREMOTE="https://${_remoteHOST}/${_remoteUSERNAME}/${_remoteNAME}.git"
+		_info "git https url: https://${_remoteHOST}/${_remoteUSERNAME}/${_remoteNAME}.git"
 	fi
 	# if _attachCreate=true, check if the desired platform is supported
 	if [[ ${_attachCreate:-} = "true" ]]; then
@@ -526,6 +542,7 @@ _attach () {
 }
 
 # create a remote to attach
+# TODO allow --private to create private
 _attachCreate () {
 	# create the remote repo
 	# the list of supported platforms for create
@@ -698,12 +715,7 @@ _createSSH () {
 	done
 	echo "${_pat}" | gh auth login -p ssh -h github.com --with-token
 	gh auth status
-	#gh repo create --license "GPL-3.0" --public -d dofi-created dofi
-	# using the --license flag puts LICENSE in master (not main) and fucks things
-	# up
-	# TODO consider using master???
-	# or alternately, upload a license file by hane once
-	gh repo create --public -d "$(cat ${_DOFIHOME}/description)" dofi
+	gh repo create --public -d "$(cat ${_DOFIHOME}/description)" "${_remoteNAME}"
 	_git remote add remote-primary ${_dofiREMOTE}
 	_git push --set-upstream remote-primary main
 	_git push -u remote-primary
@@ -818,30 +830,28 @@ _build () {
 	local _dofiDEV="${_dofiREPO}/dofi"
 	# define the path to the README.md
 	local _dofiREADME="${_dofiREPO}/README.md"
-	# option parameters:
-	#	-p	_buildPUSH=false
-	#	-i	_doINSTALL=false
 	# this function commits the dofi script to the local dofi repo
 	# then pulls that commit <hash>
 	# then replaces the _versionDATA[_currentHASH]= within the _getVERSION func
 	#   _versionDATA[_currentHASH]=<hash>  (this is the dofi "version")
-	# TODO then generates a README.md tailored for github.com (public facing)
+	# then generates a README.md tailored for github.com (public facing)
 	#  incl: description, installation, supported (tested) platforms
 	#  incl: build version (release.hash) and how to check (hash.. i think will
 	#  refer forward
 	#  followed by the usage info
-	# TODO then adds the new README.md
+	# then adds the new README.md
 	# then adds and commits the dofi script with the "version" embedded
-	# TODO then installs the file into the PATH
+	# then installs the file into the PATH
 	# NOTE: in order to obfuscate this function from regular users
 	#  (thereby preventing unnecessary confusion or worse, it does not show
 	#  in usage UNLESS the user has added '_dofiDEVELOPER=true' to his
 	#  environment (ie exported in .bashrc)
 	# TODO ideally, use vim to alert me / report on dofi development
-	# TODO add release
-	# TODO add switch for 'do not install'
+	# TODO add release tag
 	# TODO add shellcheck
-	# don't run this function unless user has explicitly enabled DEVELOPER mode
+	# TODO add signature for dofi
+	# TODO add unit tests
+	# don't do anything unless user has explicitly enabled DEVELOPER mode
 	[[ ! ${_dofiDEVELOPER:-} = "true" ]] && \
 		{ _error "'build' is not valid: read the source for more info"; exit 1; }
 	# determine what script is running
@@ -909,18 +919,15 @@ _build () {
 		_error "cannot commit unchanged files"
 		exit 1
 	fi
+	# TODO sign the dofi file
+	# https://askubuntu.com/questions/679230/how-to-sign-files-with-ubuntu-command-line-tools-and-my-own-keys
+	# https://stackoverflow.com/questions/54101657/in-bash-im-building-an-update-script-how-to-update-the-updater-script
+	# then add the signature file to the repo
+	#
 	# get the hash for the phase-1 commit
 	_newHASH=$(git -C "${_dofiREPO}" rev-parse HEAD)
 	_debug "_newHASH=${_newHASH}"
-	# read the current version values in
-	# TODO if running from the installed version, this won't work
 	_debug "_buildFROM=${_buildFROM}"
-	# TODO if running from the installed version, use 'version -b' to get the
-	# currentHASH, otherwise, use the _getVERSION func
-	# wait, do we care...we are not preserving the hash any more
-	#_getVERSION
-	#local _currentHASH="${_versionDATA[_currentHASH]}"
-	#_debug "_currentHASH=${_currentHASH:-beta}"
 	_debug "updating ${_dofiDEV} with new version tag now"
 	_debug "updating _currentHASH with '$_newHASH'"
 	key="_versionDATA\[_currentHASH\]"
@@ -943,7 +950,6 @@ _build () {
 	# then adds and commits the dofi script with the "version" embedded
 	# finally, we can commit phase 2, which commits the dofi file with its hash
 	# version tags embedded within
-	# TODO then installs the file into the PATH
 	# TODO push to the remote
 	_debug "adding and commiting phase-2 '${_dofiDEV}'"
 	git -C "${_dofiREPO}" add "${_dofiDEV}"
@@ -972,8 +978,11 @@ _build () {
 		if [[ "${_buildFROM}" = "installed" ]]; then
 			_debug "now using exec to call install from the dev instance because you're lazy"
 			#if _debug is true insert the -d flag
-			[[ "${_DEBUG:-}" = "true" ]] && _debug=("-d") || _debug=()
-			exec "${_dofiDEV}" "${_debug[@]}" install -s "${_existingDOFI}"
+			# TODO test if with exec the VAR _DEBUG propogates
+			#[[ "${_DEBUG:-}" = "true" ]] && _debug=("-d") || _debug=()
+			exec "${_dofiDEV}" install -s "${_existingDOFI}"
+			#[[ "${_DEBUG:-}" = "true" ]] && _debug=("-d") || _debug=()
+			#exec "${_dofiDEV}" "${_debug[@]}" install -s "${_existingDOFI}"
 			# TODO test paths with a space in them
 			echo "you will not get the pleasure of seeing 'INFO: dofi build complete'"
 		elif [[ "${_buildFROM}" = "dev" ]]; then
@@ -1088,14 +1097,17 @@ _create () {
 		read _preferredEMAIL
 		[ -z ${_preferredEMAIL} ] || _gitUSEREMAIL=${_preferredEMAIL}
 		# now create a gitconfig
+		_debug "creating new .gitconfig file"
 		git config --global user.name "${_gitUSERFULLNAME}"
 		git config --global user.email "${_gitUSEREMAIL}"
 	fi
 	# initialize the bare repo
+	_debug "initializing the git bare repo at '${_DOFIHOME}'"
 	git init --bare --initial-branch=main "${_DOFIHOME}" 1>/dev/null
 	# disable file tracking (in this repo only)
 	_git config --local status.showUntrackedFiles no
 	# put the usage info into README.md surrounded by backticks to render as code
+	_debug "building the README.md file"
 	echo '```' > "${HOME}/README.md"
 	_printHelp >> "${HOME}/README.md"
 	echo '```' >> "${HOME}/README.md"
@@ -1103,14 +1115,17 @@ _create () {
 	echo '```' >> "${HOME}/README.md"
 	_printAttachOptions >> "${HOME}/README.md"
 	echo '```' >> "${HOME}/README.md"
-	# TODO add this script in $HOME/bin/ or .local/bin/
 	# add and make first commit
+	_debug "adding the README.md as the first commit"
 	_git add "${HOME}/README.md"
 	_git commit -q -m "[genesis] dofi repo created by ${_USERNAME}"
 	# finally, put the "installed" marker in the git description file
+	_debug "marking a dofi signature into the description file"
 	_gitInitial=$(_git rev-parse --short --verify main)
 	_time=$(date +%s)
 	printf "dofi:${_USERNAME}:${_time}:${_gitInitial}\n" > "${_DOFIHOME}/description"
+	_debug "created 'dofi:${_USERNAME}:${_time}:${_gitInitial}'"
+	_info "success: use 'dofi help' to get started"
 }
 
 # install the script into user path
@@ -1118,9 +1133,6 @@ _install () {
 	# assume the script has been downloaded to $HOME somewhere
 	# pipe install not allowed (nor can this file be sourced)
 	#
-	# also prevent _dofiDEVELOPER=true to run this (use 'build')
-	#[[ ${_dofiDEVELOPER:-} = "true" ]] && \
-	#	{ _error "_dofiDEVELOPER=true: use 'build'"; exit 1; }
 	# set up all the various paths, etc	
 	local _installPATH
 	local _installPATHBASE
@@ -1305,14 +1317,15 @@ _install () {
 		_info "new dofi file installed"
 	fi
 	# now do the PATH work
-	if [[ ${_needPATH} = "true" ]] && [[ ${_updatePATH} = "true" ]]; then
+	if [[ ${_needPATH} = "true" ]] && [[ ${_updatePATH:-} = "true" ]]; then
 		_debug "adding '${_installPATHBASE}' to PATH now"
 		export PATH=$PATH:${_installPATHBASE}
 		_debug "adding '${_installPATHBASE}' to '$HOME/.bashrc' now"
 		echo "export PATH=$PATH:${_installPATHBASE}" >> "$HOME/.bashrc"
 		_warn "to use dofi, you will need to log off/on to reload PATH..."
 		_warn "or source the modified bashrc: 'source ~/.bashrc'"
-	elif [[ ${_needPATH} = "true" ]] && [[ ${_updatePATH} = "false" ]]; then
+	elif [[ ${_needPATH} = "true" ]]; then
+	#elif [[ ${_needPATH} = "true" ]] && [[ ${_updatePATH:-} = "false" ]]; then
 		_warn "you must add '${_installPATHBASE}' to your PATH to use 'dofi'"
 	fi
 	# now run 'dofi create' if there is no dofi
@@ -1504,7 +1517,12 @@ _setEnv () {
 		# self-installing feature
 		_getREPO
 		export _dofiREPO="${_repoLOCATION[_local]}"
+	else
+		_dofiDEVELOPER=false
+		_dofiREPO=unset
 	fi
+	# set _DEBUG
+	[[ ${_DEBUG:-} = "true" ]] || _DEBUG=false
 	# TODO include _dofiREPO if _dofiDEVELOPER=true
 	# print the environment details in _DEBUG mode
 	_debug "$(declare -p _selfNAME)"
@@ -1516,6 +1534,9 @@ _setEnv () {
 	_debug "$(declare -p _USERHOME)"
 	_debug "$(declare -p _USERNAME)"
 	_debug "$(declare -p _DOFIHOME)"
+	# print the debug value
+	_debug "$(declare -p _DEBUG)"
+	# print the developer settings
 	_debug "$(declare -p _dofiDEVELOPER)"
 	_debug "$(declare -p _dofiREPO)"
 	# print the positional parameters
