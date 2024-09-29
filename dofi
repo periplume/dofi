@@ -979,6 +979,7 @@ _build () {
 			_debug "now using exec to call install from the dev instance because you're lazy"
 			#if _debug is true insert the -d flag
 			# TODO test if with exec the VAR _DEBUG propogates
+			# now
 			#[[ "${_DEBUG:-}" = "true" ]] && _debug=("-d") || _debug=()
 			exec "${_dofiDEV}" install -s "${_existingDOFI}"
 			#[[ "${_DEBUG:-}" = "true" ]] && _debug=("-d") || _debug=()
