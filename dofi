@@ -763,7 +763,7 @@ _createHTTPS () {
 # here we store the version info in an assoc array
 declare -A _versionDATA
 _getVERSION () {
-_versionDATA[_currentHASH]=678b7eb5bd763df7c4c93e7762fe6074f98c8f99
+_versionDATA[_currentHASH]=fb8ef6adbe393f48dbb74225a5803cec88f639af
 _versionDATA[_releaseVERSION]=
 }
 

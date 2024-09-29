@@ -27,3 +27,5 @@ cd dofi; ./dofi install
 tested on ubuntu 24.01.01
 ---
 ### usage
+# TODO next include the usage pages
+# TODO finally include the build hash info and release
