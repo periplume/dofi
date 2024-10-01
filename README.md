@@ -24,7 +24,7 @@ cd dofi; ./dofi install
 ```
 ---
 ### support
-tested on ubuntu 24.01.01
+- tested on ubuntu 24.01.01
 ---
 ### usage
 ---
@@ -58,7 +58,7 @@ $ dofi git status
 
 usage: dofi install [OPTIONS]
 
-summary: copy the script into the designated PATH location
+summary: install the script and create the local bare repo
 
 install options:
  -h               print install usage
@@ -93,7 +93,7 @@ attach options:
 ---
 ~~~
 
-[38;5;2mINFO[0m dofi is installed in /home/jason/.dofi
+
 ~~~
 ---
 ~~~

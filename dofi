@@ -87,7 +87,7 @@ _printInstallOptions () {
 	cat << EOF
 usage: dofi install [OPTIONS]
 
-summary: copy the script into the designated PATH location
+summary: install the script and create the local bare repo
 
 install options:
  -h               print install usage
@@ -264,7 +264,7 @@ _getOpts () {
 				;;
 			status)
 				_subCommand=$1; shift
-				while getopts ":v" flag; do
+				while getopts ":vh" flag; do
 					case ${flag} in
 						h)
 							_printStatusOptions; exit 0
