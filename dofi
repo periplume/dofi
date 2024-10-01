@@ -16,7 +16,6 @@ IFS=$'\n\t'
 
 # REQUIREMENTS
 hash git || { echo 'ERROR: git is required'; return 1; }
-hash sed || { echo 'ERROR: sed is required'; return 1; }
 
 # DESCRIPTION
 _printDescription () {
@@ -58,15 +57,14 @@ commands:
  remove <file>    remove a file from the repo
  save             commit and push to the remote
  status           print summary of file and syncronization status
- create           creates empty new local dofi bare repo (HIDE)
  attach           attach a new remote repo to push to
- connect          connects and pulls from an existing dofi repo
- install          installs dofi script and creates local repo
- version          prints script version details
+ connect          connect and pull from an existing dofi repo
+ install          install dofi script and create local repo
+ version          print script version details
 note: use -h to for specific command options (eg 'attach -h')
 
 note: git commands may be used directly, eg:
-$ dofi git commit -m "custom commit message"
+$ dofi git status
 EOF
 # note: ideal height <24 lines (eg gnome default term size is 24x80)
 }
@@ -82,22 +80,6 @@ build options:
  -c               check for updates
  -v               verbose
  -b               print the build hash
-EOF
-}
-
-_printBuildOptions () {
-	# don't show unless env indicates true
-	[[ ! ${_dofiDEVELOPER:-} = "true" ]] && \
-		{ _error "'build' is not valid: consult the source for more info"; exit 1; }
-	cat << EOF
-usage: dofi build [OPTIONS]
-
-summary: perform build of dofi script
-
-build options:
- -h               print build usage
- -p               do not push to remote
- -i               do not install to PATH
 EOF
 }
 
@@ -223,7 +205,7 @@ _getOpts () {
 				_setEnv; _version; exit 0
 				;;
 			d)
-				# we always want this to propagate
+				# we want this to propagate
 				export _DEBUG=true
 				_debug "enabled debug messages"
 				;;
@@ -262,7 +244,9 @@ _getOpts () {
 				done
 				return
 				;;
-			tig)
+			inspect)
+				# unpublished expert command
+				#TODO add flag for developer to view dofi repo
 				_subCommand=$1; shift
 				return
 				;;
@@ -306,11 +290,6 @@ _getOpts () {
 							_updatePATH=true
 							;;
 						d)
-							_createDOFI=false
-							;;
-						B)
-							# developer build function (unpublished option)
-							_build=true
 							_createDOFI=false
 							;;
 						s)
@@ -402,20 +381,8 @@ _getOpts () {
 				return
 				;;
 			build)
+				# run the build script (consult _build for more info) 
 				_subCommand=$1; shift
-				while getopts ":hpi" flag; do
-					case ${flag} in
-						h)
-							_printBuildOptions; exit 0
-							;;
-						p)
-							_buildPUSH=false
-							;;
-						i)
-							_doINSTALL=false
-							;;
-					esac
-				done
 				return
 				;;
 			create)
@@ -450,10 +417,14 @@ _getOpts () {
 
 # SUBCOMMAND FUNCTIONS
 
-_tig () {
-	tig -C "${_DOFIHOME}"
-	# TODO give two options, to examine the git repo (for dev) and to examine the
-	# dotdofi
+_inspect () {
+	# and "expert" command not published in usage
+	# if tig exists, use tig, otherwise, use 'git log'
+	if hash tig >/dev/null 2>&1; then
+		tig -C "${_DOFIHOME}"
+	else
+		_git log
+	fi
 }
 
 _add () {
@@ -809,231 +780,17 @@ _version () {
 	return
 }
 
-# here we store the developer repo location
-declare -A _repoLOCATION
-_getREPO () {
-	# set the local repo path here to complete the developer setup
-	_repoLOCATION[_local]="${HOME}/lab/dofi"
-	_repoLOCATION[_remoteHTTPS]="https://github.com/periplume/dofi.git"
-	_repoLOCATION[_remoteSSH]="git@github.com:periplume/dofi.dit"
-}
-
 _build () {
-	# developer feature (requires env var: _dofiDEVELOPER=true)
-	# read the local repo location in
-	# (set in _repoLOCATION[_local]= within the _getREPO function)
-	_getREPO
-	_dofiREPO="${_repoLOCATION[_local]}"
-	# get the full path to the instance in the PATH
-	local _existingDOFI=$(command -v dofi)
-	# define the full path to the development instance in the repo working dir
-	local _dofiDEV="${_dofiREPO}/dofi"
-	# define the path to the README.md
-	local _dofiREADME="${_dofiREPO}/README.md"
-	# this function commits the dofi script to the local dofi repo
-	# then pulls that commit <hash>
-	# then replaces the _versionDATA[_currentHASH]= within the _getVERSION func
-	#   _versionDATA[_currentHASH]=<hash>  (this is the dofi "version")
-	# then generates a README.md tailored for github.com (public facing)
-	#  incl: description, installation, supported (tested) platforms
-	#  incl: build version (release.hash) and how to check (hash.. i think will
-	#  refer forward
-	#  followed by the usage info
-	# then adds the new README.md
-	# then adds and commits the dofi script with the "version" embedded
-	# then installs the file into the PATH
-	# NOTE: in order to obfuscate this function from regular users
-	#  (thereby preventing unnecessary confusion or worse, it does not show
-	#  in usage UNLESS the user has added '_dofiDEVELOPER=true' to his
-	#  environment (ie exported in .bashrc)
-	# TODO ideally, use vim to alert me / report on dofi development
-	# TODO add release tag
-	# TODO add shellcheck
-	# TODO add signature for dofi
-	# TODO add unit tests
+	# developer feature
+	# requires ENV VAR: _dofiDEVELOPER=true
+	# requires setting the path to the local repo here:
+	_dofiREPO="${HOME}/lab/dofi"
 	# don't do anything unless user has explicitly enabled DEVELOPER mode
 	[[ ! ${_dofiDEVELOPER:-} = "true" ]] && \
 		{ _error "'build' is not valid: read the source for more info"; exit 1; }
-	# determine what script is running
-	if [[ "${_selfABSOLUTE}" = "${_dofiDEV}" ]]; then
-		_debug "build: running from the dev instance"
-		_buildFROM=dev
-	elif [[ "${_selfABSOLUTE}" = "${_existingDOFI}" ]]; then
-		_warn "build: running from the installed instance"
-		_buildFROM=installed
-	else
-		_warn "build: running from neither installed nor dev instance"
-		_error "run build from installed instance in path or dev instance only"
-		exit 1
-	fi
-	# make sure _dofiREPO is a repo
-	if git -C "${_dofiREPO}" rev-parse >/dev/null 2>&1; then
-		_debug "build: '${_dofiREPO}' is the live git repo"
-		# make sure _dofiDEV exists
-		[ -e "${_dofiDEV}" ] || { _error "missing '${_dofiDEV}'"; exit 1; }
-	else
-		_debug "build: '${_dofiREPO}' is not a git repo"
-		_error "'${_dofiREPO}' is not a git repo"
-		exit 1
-	fi
-	#
-	# check that there is an existing dofi in the PATH
-	[ ! -e "${_existingDOFI:-}" ] && { _error "no dofi in the path; use 'install' first"; exit 1; }
-	# check if _dofiDEV is newer than _existingDOFI (to prevent changes if
-	# _existingDOFI is the file being changed...it does happen)
-	if cmp --silent "${_dofiDEV}" "${_existingDOFI}"; then
-		_debug "'${_dofiDEV}' and '${_existingDOFI}' are identical"
-		_doINSTALL=false
-	else
-		if [[ "${_existingDOFI}" -nt "${_dofiDEV}" ]]; then
-			_warn "'${_existingDOFI}' is newer than '${_dofiDEV}'"
-			_error "bad practice, or mistake?"
-			exit 1
-		fi
-	fi
-	# finally check if the _dofiDEV file has changed since the last commit
-	if git -C "${_dofiREPO}" diff --quiet --exit-code "${_dofiDEV}"; then
-		_error "'${_dofiDEV}' has not changed"
-		# unless this is brand new...in which case, add it manually
-		exit 1
-	else
-		_debug "changes in '${_dofiDEV}' detected, proceeding"
-	fi
-	# everthing should be in order now
-	# warnings...since we are changing the live file!!
-	_warn "BEGIN: dofi build process"
-	_danger "the file '${_dofiDEV}' is about to change...beware"
-	_warn "modification of dev instance will follow commit, followed by another commit"
-	_ask "type 'ok' and hit enter when ready "
-	read _ok
-	[[ ! ${_ok} = "ok" ]] && { _error "build process aborted"; exit 1; }
-	# add the file to staging and commit
-	_debug "adding and commiting phase-1 '${_dofiDEV}'"
-	git -C "${_dofiREPO}" add "${_dofiDEV}"
-	git -C "${_dofiREPO}" commit -q -m "[dofi] commit phase-1" >/dev/null 2>&1
-	_returnGITCOMMIT1=$?
-	if [[ ! ${_returnGITCOMMIT1} = 0 ]]; then
-		# git commit failed
-		_debug "command 'git -C ${_dofiREPO} commit' failed"
-		_warn "git commit failed, likely because there were no changes to commit"
-		_error "cannot commit unchanged files"
-		exit 1
-	fi
-	# TODO sign the dofi file
-	# https://askubuntu.com/questions/679230/how-to-sign-files-with-ubuntu-command-line-tools-and-my-own-keys
-	# https://stackoverflow.com/questions/54101657/in-bash-im-building-an-update-script-how-to-update-the-updater-script
-	# then add the signature file to the repo
-	#
-	# get the hash for the phase-1 commit
-	_newHASH=$(git -C "${_dofiREPO}" rev-parse HEAD)
-	_debug "_newHASH=${_newHASH}"
-	_debug "_buildFROM=${_buildFROM}"
-	_debug "updating ${_dofiDEV} with new version tag now"
-	_debug "updating _currentHASH with '$_newHASH'"
-	key="_versionDATA\[_currentHASH\]"
-	hash="${_newHASH}"
-	# sorry, sed makes this trivial
-	# define the function line within which the _versionDATA array exists
-	f="_getVERSION () {"    # to keep sed a reasonable length 
-	sed -i '/'$f'/,/^}/!b;s/^[[:space:]]*'$key'=.*$/'$key'='$hash'/' "${_dofiDEV}"
-	# TODO work around the use of sed please
-	# next, generate a new README.md file tailored for github public facing
-	_buildREADME "${_dofiREADME}"
-	# then add this new README.md file to the staging index
-	git -C "${_dofiREPO}" add "${_dofiREADME}"
-	# then generates a README.md tailored for github.com (public facing)
-	#  incl: description, installation, supported (tested) platforms
-	#  incl: build version (release.hash) and how to check (hash.. i think will
-	#  refer forward
-	#  followed by the usage info
-	# then adds the new README.md
-	# then adds and commits the dofi script with the "version" embedded
-	# finally, we can commit phase 2, which commits the dofi file with its hash
-	# version tags embedded within
-	# TODO push to the remote
-	_debug "adding and commiting phase-2 '${_dofiDEV}'"
-	git -C "${_dofiREPO}" add "${_dofiDEV}"
-	git -C "${_dofiREPO}" commit -q -m "[dofi] commit phase-2"
-	_returnGITCOMMIT2=$?
-	if [[ ${_returnGITCOMMIT2} = 0 ]]; then
-		_info "build: success"
-	else
-		_warn "build: failed"
-	fi
-	# next push the changes to the repo (unless _buildPUSH=false)
-	if [[ "${_buildPUSH:-}" = "false" ]]; then
-		_debug "user specified not to push to the remote"
-	else
-		_debug "push to remote is true"
-		echo "TODO check if there is a remote, if so, push"
-	fi
-	# finally install the new dofi into the path
-	# we must check whether this has been run from the installed live dofi in the
-	# path or the dev dofi in the repo. if the former, we exec out and call
-	# _install from the repo version
-	# we also must check whether: _doINSTALL=false
-	# in which case the user has purposely requested not to install into the path
-	if [[ ! "${_doINSTALL:-}" = "false" ]]; then
-		# check if the executing script is the live one or the dev one
-		if [[ "${_buildFROM}" = "installed" ]]; then
-			_debug "now using exec to call install from the dev instance because you're lazy"
-			exec "${_dofiDEV}" install -s "${_existingDOFI}"
-			# TODO test paths with a space in them
-			echo "you will not get the pleasure of seeing 'INFO: dofi build complete'"
-		elif [[ "${_buildFROM}" = "dev" ]]; then
-			_debug "good practice, build from the dev version, well done"
-			cp "${_dofiDEV}" "${_existingDOFI}"
-			_info "installed new version to path"
-		fi
-	fi
-	_info "dofi build complete"
-}
-
-_buildREADME () {
-	# takes one mandatory arg: full path to the README.md file
-	[[ -z "${1}" ]] && return 1
-	local _README=${1}
-	# uses mktemp if no path was given
-	# produce a nice markdown README suitable for github
-	# TODO: can i make a public README.md with
-	#  - description
-	#  - installation
-	#  - support
-	#  - usage
-	# first add the description, installation, and support info
-	cat >"${_README}" <<'EOF'
-## dofi: dotfile manager
-
-dofi takes the git out of bare-repo dotfile management
-- a bash script with minimal dependencies (said sorry)
-- automates the creation of the local dotfile repo
-- automates and assists with the creation and connection to a remote repo
-- friendly and easy introduction to dotfile management with git
-- hides complexity at the expense of brevity (intentional design)
-- attempts to be robust, clean, clear, and reusable code
-- solves a simple problem: keep my stuff safe without hassle
-
----
-### installation
-using curl
-```
-curl https://raw.githubusercontent.com/periplume/dofi/refs/heads/main/dofi
-chmod +x dofi
-./dofi install
-```
-using git to clone the dofi repo
-```
-git clone https://github.com/periplume/dofi.git
-cd dofi; ./dofi install
-```
----
-### support
-tested on ubuntu 24.01.01
----
-### usage
-EOF
-# TODO next include the usage pages
-# TODO finally include the build hash info and release
+	# use exec to run the dofi.build in the local repo
+	_debug "using 'exec' to run the build script"
+	exec "${_dofiREPO}/build/dofi.build" "${@}"
 }
 
 # create a local repo function
@@ -1338,7 +1095,7 @@ _install () {
 
 # install the github cli
 _installGithubCLI () {
-	# install routine from:
+	# beautiful install routine from:
 	# https://github.com/cli/cli/blob/trunk/docs/install_linux.md
 	(type -p wget >/dev/null || (sudo apt update && sudo apt-get install wget -y)) \
 	&& sudo mkdir -p -m 755 /etc/apt/keyrings \
@@ -1351,21 +1108,17 @@ _installGithubCLI () {
 
 # check for ssh-agent
 _checkSSHAgent () {
-	# validate that ssh-agent is running; start if not
-	# TODO do not muck with ssh-agent, warn and exit instead
+	# validate that ssh-agent is running; warn if not
+	# do not muck with ssh-agent, warn and exit instead
 	# ssh-agent is a hot mess with its startup requirements
 	# besides, a user's security is his own business
 	timeout .3s ssh-add -l &>/dev/null
 	if [ "$?" == 2 ]; then
-		# ssh-agent isn't running; start it
-		_warn "no ssh-agent running; start ssh-agent as follows:"
-		_warn '# eval $(ssh-agent -s)' #note the use of single quotes here
+		# ssh-agent isn't running; warn
+		_warn "no ssh-agent running; a running ssh-agent is recommended"
 		return 1
-		# the whack method ssh-agent requires to start
-		#eval $(ssh-agent -s)
-		# for the pid we use $SSH_AGENT_PID
-		#_debug "ssh-agent started as PID '${SSH_AGENT_PID}'"
 	fi
+	# TODO improve the discovery here...
 }
 
 # ssh-keygen wrapper
@@ -1480,7 +1233,6 @@ _clip() {
 	_debug "public key copied to clipboard"
 }
 
-
 # git wrapper and passthrough
 _git () {
 	# check if this is a raw git command (ie 'dofi git <etc>')
@@ -1506,16 +1258,8 @@ _setEnv () {
 	_USERHOME=${HOME}
 	_USERNAME=$(whoami)
 	_DOFIHOME="${_USERHOME}/.dofi"
-	if [[ "${_dofiDEVELOPER:-}" = "true" ]]; then
-		# read the array _repoLOCATION within the _getREPO function and then export
-		# this as _dofiREPO so that _build can pass it through exec for the
-		# self-installing feature
-		_getREPO
-		export _dofiREPO="${_repoLOCATION[_local]}"
-	else
-		_dofiDEVELOPER=false
-		_dofiREPO=unset
-	fi
+	# set _dofiDEVELOPER
+	[[ ${_dofiDEVELOPER:-} = "true" ]] || _dofiDEVELOPER=false
 	# set _DEBUG
 	[[ ${_DEBUG:-} = "true" ]] || _DEBUG=false
 	# TODO include _dofiREPO if _dofiDEVELOPER=true
@@ -1531,9 +1275,8 @@ _setEnv () {
 	_debug "$(declare -p _DOFIHOME)"
 	# print the debug value
 	_debug "$(declare -p _DEBUG)"
-	# print the developer settings
+	# print the developer status
 	_debug "$(declare -p _dofiDEVELOPER)"
-	_debug "$(declare -p _dofiREPO)"
 	# print the positional parameters
 	_debug "$(declare -p _allParams)"
 	_debug "$(declare -p _subCommandParams)"
