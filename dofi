@@ -698,39 +698,6 @@ _createHTTPS () {
 	echo TODO
 }
 
-
-# TODO
-# use a double commit for the dofi file (build)
-# commit the file, then take the commit hash and add it to the dofi file
-# then commit
-# the hash^ refers to the commit prior
-# the hash.. refers to the commit after
-# we have a commit for dofi, and its hash
-# which we put in file and commit
-# thus, the file 'hash^' refers to the "release version"
-# and to get the file with the correct version inside the file
-# we use 'hash..'
-# trying to discard all 1.0.fuckallv54 "semantic" versioning bs
-
-# version and reference
-# 1. ability to check this file against the canonical one
-# this file is added to the user's own dofi repo as the first commit
-# thus, it becomes its own source
-# thus its version is its own commit hash
-# thus, to compare it with the canonical source, we use git
-# when installed, we commit it, then grab the commit hash
-# and then update a marker with the genesis commit hash
-# and commit that...so to validate the file we check against the second commit
-# if that matches the marker, the file is unmodified
-# if it does not match, the file has been modified
-# we can check the same with git status as well
-# complex...perhaps too complex...but trying to avoid any "v1.2.blah" BS
-# and use git mechanisms to manage the concept of versions
-#
-# but for the masses...we will add a 'build -r' for release
-# this shall increment an integer by 1 (ie v1, v2...v247...etc)
-# within which each may have multiple commit hashes
-
 # here we store the version info in an assoc array
 declare -A _versionDATA
 _getVERSION () {
