@@ -29,7 +29,7 @@ the installation and interface is intended for users without prior
 knowledge of git, although it does not preclude expert git users.
 
 for data redundancy, it provides an easy to follow procedure to
-set up a remote repo to which to replicate (github only now).
+set up a remote repo to which to replicate (github only for now).
 
 the code style sacrifices brevity for clarity; it aims to be
 robust, fail-safe and easy to read. it also aims to be 
