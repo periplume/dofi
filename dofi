@@ -13,7 +13,8 @@ IFS=$'\n\t'
 
 # DEBUG OVERRIDE (uncomment to force enable _DEBUG)
 #_DEBUG=true
-
+#TODO change _create for dotdofi
+#
 # REQUIREMENTS
 hash git || { echo 'ERROR: git is required'; return 1; }
 
@@ -534,7 +535,7 @@ _attach () {
 }
 
 # create a remote to attach
-# TODO allow --private to create private
+# TODO allow --private to create private dotdofi repos
 _attachCreate () {
 	# create the remote repo
 	# the list of supported platforms for create
