@@ -34,7 +34,7 @@ set up a remote repo to which to replicate (github only for now).
 the code style sacrifices brevity for clarity; it aims to be
 robust, fail-safe and easy to read. it also aims to be 
 self-documenting and self-building. for more info, consult
-the _build() function within.
+the _build() function within the dofi.build script. WRONG.
 
 # inspired by https://news.ycombinator.com/item?id=11070797
 # and https://www.atlassian.com/git/tutorials/dotfiles
