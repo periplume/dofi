@@ -48,8 +48,7 @@ commands:
 note: use -h to for specific command options (eg 'attach -h')
 
 note: git commands may be used directly, eg:
-$ dofi git status
-~~~\n---\n~~~\nusage: dofi install [OPTIONS]
+$ dofi git status~~~\n---\n~~~\nusage: dofi install [OPTIONS]
 
 summary: copy the script into the designated PATH location
 
