@@ -264,7 +264,6 @@ _getOpts () {
 				;;
 			inspect)
 				# unpublished expert command
-				#TODO add flag for developer to view dofi repo
 				_subCommand=$1; shift
 				return
 				;;

@@ -117,6 +117,7 @@ version options:
  -v               verbose
 ~~~
 ---
+### description
 ~~~
 
 dofi is a single bash script designed to manage user dotfiles using
