@@ -420,8 +420,9 @@ _getOpts () {
 
 # SUBCOMMAND FUNCTIONS
 
+# 
 _inspect () {
-	# and "expert" command not published in usage
+	# "expert" command not published in usage
 	# if tig exists, use tig, otherwise, use 'git log'
 	if hash tig >/dev/null 2>&1; then
 		tig -C "${_DOFIHOME}"
