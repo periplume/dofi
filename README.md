@@ -27,7 +27,10 @@ cd dofi; ./dofi install
 tested on ubuntu 24.01.01
 ---
 ### usage
----\n~~~\nusage: dofi [GLOBAL OPTIONS] <command> [COMMAND OPTIONS]
+---
+~~~
+
+usage: dofi [GLOBAL OPTIONS] <command> [COMMAND OPTIONS]
 
 summary: preserve, protect, and revision your personal files
 
@@ -48,7 +51,11 @@ commands:
 note: use -h to for specific command options (eg 'attach -h')
 
 note: git commands may be used directly, eg:
-$ dofi git status~~~\n---\n~~~\nusage: dofi install [OPTIONS]
+$ dofi git status~~~
+---
+~~~
+
+usage: dofi install [OPTIONS]
 
 summary: copy the script into the designated PATH location
 
@@ -59,7 +66,11 @@ install options:
  -u               update PATH in .bashrc        [default reports only]
  -d               do not create local dofi repo [default creates]
  -s <path>        specify location
-~~~\n---\n~~~\nusage: dofi attach [OPTIONS]
+~~~
+---
+~~~
+
+usage: dofi attach [OPTIONS]
 
 summary: add a remote repo, optionally creates the remote
 on supported git hosting platforms
@@ -77,8 +88,16 @@ attach options:
                     [default is to prompt for a passphrase]
  -n <name>        specify the remote repo name
                     [default is 'dotdofi']
-~~~\n---\n~~~\n[38;5;2mINFO[0m dofi is installed in /home/jason/.dofi
-~~~\n---\n~~~\nusage: dofi version [OPTIONS]
+~~~
+---
+~~~
+
+[38;5;2mINFO[0m dofi is installed in /home/jason/.dofi
+~~~
+---
+~~~
+
+usage: dofi version [OPTIONS]
 
 summary: print version information
 
@@ -87,4 +106,6 @@ build options:
  -c               check for updates
  -v               verbose
  -b               print the build hash
-~~~\n---\n
+~~~
+---
+

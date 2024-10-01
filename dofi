@@ -1249,7 +1249,6 @@ _setEnv () {
 	_debug "$(declare -p _subCommandParams)"
 }
 
-
 # the main entry point
 main () {
 	# read the positional parameters
