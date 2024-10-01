@@ -37,6 +37,7 @@ global options:
  -h       print help
  -d       print debug messages
  -v       print version
+ -e       print explaination
 
 commands:
  add <file>       add file to the dotfile repo
@@ -61,10 +62,13 @@ summary: install the script and create the local bare repo
 
 install options:
  -h               print install usage
- -l               use ~/.local/bin              [default]
+ -l               use ~/.local/bin
+                    [default]
  -b               use ~/bin
- -u               update PATH in .bashrc        [default reports only]
- -d               do not create local dofi repo [default creates]
+ -u               update PATH in .bashrc
+                    [default reports only]
+ -d               do not create local dofi repo
+                    [default creates if no existing]
  -s <path>        specify location
 ~~~
 ---
@@ -96,8 +100,8 @@ usage: dofi status [OPTIONS]
 
 summary: print installation and repo status 
 
-build options:
- -h               print version usage
+status options:
+ -h               print status usage
  -v               verbose
 ~~~
 ---
@@ -107,11 +111,31 @@ usage: dofi version [OPTIONS]
 
 summary: print version information
 
-build options:
+version options:
  -h               print version usage
  -c               check for updates
  -v               verbose
- -b               print the build hash
+~~~
+---
+~~~
+
+dofi is a single bash script designed to manage user dotfiles using
+the git bare-repo method. it can be used, of course, to bring any
+files under local git control.
+
+the installation and interface is intended for users without prior
+knowledge of git, although it does not preclude expert git users.
+
+for data redundancy, it provides an easy to follow procedure to
+set up a remote repo to which to replicate (github only now).
+
+the code style sacrifices brevity for clarity; it aims to be
+robust, fail-safe and easy to read. it also aims to be 
+self-documenting and self-building. for more info, consult
+the _build() function within.
+
+# inspired by https://news.ycombinator.com/item?id=11070797
+# and https://www.atlassian.com/git/tutorials/dotfiles
 ~~~
 ---
 
