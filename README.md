@@ -27,7 +27,6 @@ cd dofi; ./dofi install
 - tested on ubuntu 24.01.01
 ---
 ### usage
----
 ~~~
 
 usage: dofi [GLOBAL OPTIONS] <command> [COMMAND OPTIONS]
@@ -93,7 +92,13 @@ attach options:
 ---
 ~~~
 
+usage: dofi status [OPTIONS]
 
+summary: print installation and repo status 
+
+build options:
+ -h               print version usage
+ -v               verbose
 ~~~
 ---
 ~~~
