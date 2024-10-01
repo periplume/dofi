@@ -266,6 +266,9 @@ _getOpts () {
 				_subCommand=$1; shift
 				while getopts ":v" flag; do
 					case ${flag} in
+						h)
+							_printStatusOptions; exit 0
+							;;
 						v)
 							_statusVERBOSE=true
 							;;

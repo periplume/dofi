@@ -51,7 +51,8 @@ commands:
 note: use -h to for specific command options (eg 'attach -h')
 
 note: git commands may be used directly, eg:
-$ dofi git status~~~
+$ dofi git status
+~~~
 ---
 ~~~
 
