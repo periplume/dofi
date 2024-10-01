@@ -1264,3 +1264,5 @@ main () {
 (return 0 2>/dev/null) && { _error "dofi cannot be sourced"; return; }
 # run the main() function
 main "${@}"
+
+#just a change 
