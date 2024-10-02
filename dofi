@@ -47,6 +47,7 @@ info, consult the _build() function within the dofi.build script.
 EOF
 }
 
+
 # USAGE
 _printHelp () {
 	cat << EOF
