@@ -38,8 +38,9 @@ the user experience is meant to cater to non-technical users and
 to conceal the complexities of git and data replication. ideally,
 my mother should be capable of using it.
 
-the code also aims to be self-documenting self-building. for more
-info, consult the _build() function within the dofi.build script.
+the code also aims to be self-documenting self-building, in other
+words, fully automated. for more info, consult the _build() function
+within the dofi.build script.
 
 # inspired in part by https://news.ycombinator.com/item?id=11070797
 # and https://www.atlassian.com/git/tutorials/dotfiles
