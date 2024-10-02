@@ -131,12 +131,19 @@ for data redundancy, it provides an easy to follow procedure to
 set up a remote repo to which to replicate (github only for now).
 
 the code style sacrifices brevity for clarity; it aims to be
-robust, fail-safe and easy to read. it also aims to be 
-self-documenting and self-building. for more info, consult
-the _build() function within the dofi.build script.
+robust, fail-safe and easy to read. obfuscation is not the goal.
 
-# inspired by https://news.ycombinator.com/item?id=11070797
+the user experience is meant to cater to non-technical users and
+to conceal the complexities of git and data replication. ideally,
+my mother should be capable of using it.
+
+the code also aims to be self-documenting self-building. for more
+info, consult the _build() function within the dofi.build script.
+
+# inspired in part by https://news.ycombinator.com/item?id=11070797
 # and https://www.atlassian.com/git/tutorials/dotfiles
+# and many other terminal-only projects.
+#
 ~~~
 ---
 
