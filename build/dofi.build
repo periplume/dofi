@@ -1,0 +1,557 @@
+#!/usr/bin/env bash
+# file: dofi.build
+# description: dofi commit and build script
+# source: https://github.com/periplume/dofi.git
+# copyright (c) 2024 Jason Lindemuth <jason@bloom.us>
+# licensed under GPL-3.0-or-later
+
+# DEFINE THE LOCAL REPO LOCATION HERE
+declare -A _repoLOCATION
+_getREPO () {
+	# set the local repo path here to complete the developer setup
+	_repoLOCATION[_local]="${HOME}/lab/dofi"
+	_repoLOCATION[_remote]="git@github.com:periplume/dofi.dit"
+# assumes remote repo has been created
+# assumes ssh keys are in place (use -t to test this)
+}
+
+# STRICT (SAFE) SCRIPT AND SHELL SETTINGS
+set -o errexit
+set -o nounset
+set -o pipefail
+IFS=$'\n\t' 
+
+# REQUIREMENTS
+hash git || { echo 'ERROR: git is required'; return 1; }
+hash fold || { echo 'ERROR: fold is required'; return 1; }
+hash cmp || { echo 'ERROR: cmp is required'; return 1; }
+hash ssh || { echo 'ERROR: ssh is required'; return 1; }
+hash tig || { echo 'WARN: tig is recommended'; }
+# TODO a better means of this...here the first one kills the rest
+
+_printHelp () {
+	cat << EOF
+usage: dofi.build [OPTIONS]
+
+summary: commit, build, push, and install dofi script
+
+build options:
+ -d               print debug messages
+ -b               build and commit
+ -e               use EDITOR for commit message
+ -t               test remote connectivity
+ -p               do not push to remote
+ -i               do not install to PATH
+ -r               create a release
+ -I               inspect repo with tig
+EOF
+}
+
+# CONSOLE COLORIZING FUNCTIONS
+# these functions provide (mostly) uniform status messages
+# they take one argument (a string) and are called so:
+# _info "the operation was a success"
+#
+# use _ask for prompting for y/n and data input (does not newline)
+# use read to read the input in
+# yellow bg and black text -without- newline
+_ask() {
+	printf "\033[38;5;5;48;5;82mUSER\033[0m %s" "$1"
+# note: echo required after read from _ask in order to format 
+# the lines correctly (a minor annoyance I have't fixed)
+}
+# use to call attention to something user must do
+# yellow bg and black text -with- newline 
+_note() {
+	printf "\033[38;5;0;48;5;11mNOTE\033[0m %s\n" "$1"
+}
+# use for high danger prompt
+# red bg with blinking white text
+_danger() {
+	printf "\033[5;97;41mNOTE\033[0m %s\n" "$1"
+}
+# use to report on normal results or activity
+# black bg and green text with newline
+_info() {
+	printf "\033[38;5;2mINFO\033[0m %s\n" "$1"
+}
+# use to warn about unusual but non-fatal results or conditions
+# black bg and yellow text with newline
+_warn() {
+	printf "\033[38;5;11mWARN\033[0m %s\n" "$1"
+}
+# use to report details of fatal errors
+# black bg and bold red text with newline
+_error() {
+	printf "\033[38;5;9mERROR\033[0m %s\n" "$1"
+}
+# use to print detailed debug statements (when _DEBUG=true)
+# black bg and cyan text with newline
+_debug() {
+	[ "${_DEBUG:-false}" = "false" ] || printf "\033[38;5;6mDEBUG\033[0m %s\n" "$1"
+}
+
+# these functions are used to add color to text based on data type, eg:
+# _ask "enter path [$(_fmt path "${_pathname}")] "
+# will format the variable $_pathname into yellow text on black bg
+_fmt() {
+	# arg 1 = specify the kind of thing to format
+	# arg 2 = the string to be formatted (must be "quoted message")
+	# print a path in yellow
+	[[ $1 = "path" ]] && printf "\033[93;40m%s\033[0m\n" "$2"
+	# print an email address in yellow
+	[[ $1 = "email" ]] && printf "\033[38;5;11m%s\033[0m\n" "$2"
+	# print a command name in green
+	[[ $1 = "cmd" ]] && printf "\033[38;5;2m%s\033[0m\n" "$2"
+	# print an url in bright cyan
+	[[ $1 = "url" ]] && printf "\033[38;5;87m%s\033[0m\n" "$2"
+	# print white text on green bg (eg like a github.com button)
+	[[ $1 = "button" ]] && printf "\033[97;42m%s\033[0m\n" "$2"
+	# print black text on a grey background (eg like keyboard keys)
+	[[ $1 = "key" ]] && printf "\033[30;47m%s\033[0m\n" "$2"
+	# print bright magenta text for special names
+	[[ $1 = "name" ]] && printf "\033[1;95;40m%s\033[0m\n" "$2"
+}
+
+# PARAMETER PROCESSING
+_getOpts () {
+	local OPTIND
+	while getopts ":hdebtpirI" flag ; do
+		case ${flag} in
+			h)
+				_printHelp; exit 0
+				;;
+			d)
+				_DEBUG=true
+				;;
+			e)
+				_useGITEDITOR=true
+				;;
+			b)
+				_doBUILD=true
+				;;
+			t)
+				# test remote
+				_testSSH || { _error "test: ssh failed"; exit 1; }
+				_info "test: success"; exit 0
+				;;
+			p)
+				# do not push to remote
+				_pushREMOTE=false
+				;;
+			i)
+				# do not install to PATH
+				_doINSTALL=false
+				;;
+			r)
+				# create a release
+				_createRELEASE=true
+				;;
+			I)
+				# inspect git repo with tig or 'git log'
+				_setEnv; _inspect
+				exit 0
+				;;
+			:)
+				_error "'-${OPTARG}' requires an argument"
+				exit 1
+				;;
+			\?)
+				_error "unknown option '-${OPTARG}'"
+				exit 1
+				;;
+		esac
+	done
+	# discard the processed options
+	shift $((OPTIND-1))
+	# now check for "help" or other spurious arguments
+	if [[ -n ${1:-} ]]; then
+		_warn "spurious argument: ${1}"
+		_printHelp; exit 1
+	fi
+}
+
+_interactiveCommit () {
+	# the hand-held git commit with guardrails
+	# enforces length and initial capitalization
+	# user did not specify -e to use native git commit EDITOR
+	_commitSummaryPrompt () {
+		_note "add the commit message, 50 char max, capitalize, use imperative"
+		_note "type commit summary below:   IDEAL LENGTH-->|     |<--MAX!"
+		_ask ''
+	}
+	_commitSummaryPrompt
+ 	_commitMSG=''
+	# read one character at a time, limit length, colorize, and allow backspace
+	# note, we cannot use bash readline because of the color tricks
+	# note: a more thorough control of character and key input would be better
+ 	while IFS= read -r -s -n1 char; do
+		# read the character
+		if [[ $char == $'\0' ]]; then
+			# read null (enter)
+			_askUSER=true
+		elif [[ $char == $'\11' ]]; then
+			# ignore the tab char
+			:
+		elif [[ $char == $'\x0C' || $char == $'\x0B' ]]; then
+			# ignore the ctrl-l and ctrl-k
+			:
+		elif [[ $char == $'\x08' ]]; then
+			# ignore ctrl-h
+		 	:
+		elif [[ $char == $'\e' ]]; then
+			# ignore escape keys by reading them into nothing
+			read -rsn3 -t .002 || true
+		elif [[ $char == $'\177' ]]; then
+			# erase a char from the message string with backspace
+			[[ ${#_commitMSG} -gt 0 ]] && _commitMSG=${_commitMSG:0:-1} || _commitMSG=''
+		else
+			if [[ ${#_commitMSG} -ge 50 ]]; then
+				# clear the prompt line
+				printf "\033[2K\r"
+				# flash the screen to remind the user to pay attention
+				printf '\e[?5h'; sleep 0.3 ; printf '\e[?5l'; echo
+				# flush out the read buffer and carry on with true
+				read -rsn10 -t 0.01 || :
+				# not foolproof...but catches the majority of over-typing
+				_askUSER=true
+			else
+				# add the char to the message string
+				_commitMSG+="$char"
+			fi
+		fi
+		# colorize the message string based on length
+		# use white for characters less than 45
+		good=$(printf "\e[37m%s\e[0m" "${_commitMSG:0:45}")
+		# use yellow text for characters in range 45-50 length
+		warn=$(printf "\e[93m%s\e[0m" "${_commitMSG:45:50}")
+		# print the prompt and message string (colorized by length)
+		printf "\033[2K\r%s%s%s" "$(_ask '')" "${good:-}" "${warn:-}"
+		# prompt for acceptance
+		if [[ ${_askUSER:-} = "true" ]]; then
+			if [ -z "${_commitMSG:-}" ]; then
+				# clear the USER prompt
+				printf "\033[2K\r"
+				_error "empty commit messages not permitted"
+				exit 1
+			fi
+			echo
+			_note "commit summary: '${_commitMSG}' (len=${#_commitMSG})"
+			while read -rsn1 -p "$(_ask 'accept [y/n/q] ')" _yn; do
+				if [ "${_yn}" = "q" ]; then
+					echo; _warn "build: user aborted"
+					exit 1
+				elif [ "${_yn}" = "y" ]; then
+					echo; break 2
+				elif [ "${_yn}" = "n" ]; then
+					# reset
+					echo
+					_commitMSG=''
+					unset _askUSER
+					_commitSummaryPrompt; break 
+				else
+					# ignore everything else
+					printf "\033[2K\r" && :
+				fi
+			done
+		fi
+	done
+	# capitalize the string if it's not already
+	_commitMSG=${_commitMSG^}
+	# next suggest a full explanation (the full commit paragraph; optional)
+	_commitFullPrompt () {
+		_note "type full commit explanation below:"
+		_ask ''
+	}
+	# here we use readline (note: for the normal git experience, use -e)
+	# reads until a newline
+	# TODO when typing past the terminal width the wrapping does not newline?
+	# ie if we cant control this, we should use term width to determine the max
+	# limit of this input to avoid? (fixing this is non-trivial, and
+	# involves checking the terminal width and then inserting it at the
+	# bet spot...probably best to avoid this and use git EDITOR instead
+	while read -r -p "$(_commitFullPrompt)" -e _commitMSGFULL; do
+		#_note "commit summary: ${_commitMSG}"
+		if [ -n "${_commitMSGFULL:-}" ]; then
+			# reformat to <72 char lines per the 50/72 convention
+			_commitMSGFULL=$(echo "${_commitMSGFULL}" | fold -s -w 72)
+			_note "commit full: ${_commitMSGFULL}"
+		elif [ -z "${_commitMSGFULL}" ]; then
+			break
+		fi
+		while read -rsn1 -p "$(_ask 'accept [y/n/q] ')" _yn; do
+			if [ "${_yn}" = "q" ]; then
+				echo
+				_warn "build: user aborted"
+				exit 1
+			elif [ "${_yn}" = "y" ]; then
+				echo
+				break 2
+			elif [ "${_yn}" = "n" ]; then
+				echo; break
+			else
+				# ignore everything else
+				printf "\033[2K\r" && :
+			fi
+		done
+	done
+	_note "commit summary: '${_commitMSG}'"
+	_note "commit full: ${_commitMSGFULL:-}"
+	_note "files in commit: $(git -C "${_repoLOCAL}" --no-pager diff --name-only --cached)"
+	while read -rsn1 -p "$(_danger 'commit now? [y/n/q] ')" _yn; do
+			if [[ "${_yn}" == "q" || "${_yn}" == "n" ]]; then
+				echo
+				_warn "build: user aborted"
+				exit 1
+			elif [ "${_yn}" = "y" ]; then
+				echo
+				break
+			else
+				# ignore everything else
+				printf "\033[2K\r" && :
+			fi
+		done
+}
+
+_build () {
+	# the full path to the instance in the PATH
+	local _existingDOFI
+	_existingDOFI=$(command -v dofi)
+	# the full path to the development instance in the repo working dir
+	local _dofiDEV="${_repoLOCAL}/dofi"
+	# the path to the README.md
+	local _dofiREADME="${_repoLOCAL}/README.md"
+	
+	# make sure _repoLOCAL is a valid repo
+	if git -C "${_repoLOCAL}" rev-parse >/dev/null 2>&1; then
+		_debug "build: '${_repoLOCAL}' is a valid git repo"
+		# make sure the dofi script exists
+		[ -e "${_dofiDEV}" ] || { _error "missing '${_dofiDEV}'"; exit 1; }
+	else
+		_debug "build: '${_repoLOCAL}' is not a git repo"
+		_error "'${_repoLOCAL}' is not a git repo"
+		exit 1
+	fi
+	
+	# validate that there is a remote
+	_info "testing connectivity to remote repo"
+	_remoteCHECK=$(git -C "${_repoLOCAL}" remote | head -n1)
+	if ! git ls-remote "${_remoteCHECK}" > /dev/null 2>&1; then
+		_error "build: remote '${_remoteCHECK}' is not reachable"
+		exit 1
+	fi
+	
+	# check that there is an existing dofi in the PATH
+	[ ! -e "${_existingDOFI:-}" ] && { _error "no dofi in the path; use 'install' first"; exit 1; }
+	# check if _dofiDEV is newer than _existingDOFI (to prevent changes if
+	# _existingDOFI is the file being changed...it does happen)
+	if cmp --silent "${_dofiDEV}" "${_existingDOFI}"; then
+		_debug "'${_dofiDEV}' and '${_existingDOFI}' are identical"
+		_doINSTALL=false
+	elif [[ "${_existingDOFI}" -nt "${_dofiDEV}" ]]; then
+		_warn "'${_existingDOFI}' is newer than '${_dofiDEV}'"
+		_error "bad practice, or mistake?"
+		exit 1
+	else
+		_debug "build: '${_dofiDEV}' is newer than '${_existingDOFI}' as expected"
+	fi
+
+	# finally check if the _dofiDEV file has changed since the last commit
+	if git -C "${_repoLOCAL}" diff --quiet --exit-code "${_dofiDEV}"; then
+		_error "'${_dofiDEV}' has not changed"
+		# unless this is brand new...in which case, add it manually
+		exit 1
+	else
+		_debug "changes in '${_dofiDEV}' detected, proceeding"
+	fi
+
+	# next, generate a new README.md file tailored for github
+	_buildREADME "${_dofiREADME}"
+	_info "generated new README.md"
+	
+	# do the commit
+	_note "commit to '${_dofiDEV}' will proceed now"
+	# use the git commit with EDITOR (when -e used for expert|editor)
+	if [ "${_useGITEDITOR:-}" = "true" ]; then
+		git -C "${_repoLOCAL}" commit -a
+		_returnGITCOMMIT=$?
+	else
+		# if user did not specify -e: use the _interactiveCommit function 
+		_interactiveCommit || { _error "FAIL"; exit 1; }
+		git -C "${_repoLOCAL}" commit -a -q -m "${_commitMSG}" -m "${_commitMSGFULL:-}" >/dev/null 2>&1
+		_returnGITCOMMIT=$?
+	fi
+	if [[ ! ${_returnGITCOMMIT} = 0 ]]; then
+		# git commit failed
+		_error "command 'git -C ${_repoLOCAL} commit' failed"
+		exit 1
+	else
+		_info "build: success"
+	fi
+
+	# next push the changes to the repo (unless _buildPUSH=false)
+	if [[ "${_buildPUSH:-}" = "false" ]]; then
+		_debug "user specified not to push to the remote"
+	else
+		_info "pushing build to remote now"
+		git -C "${_repoLOCAL}" push -u origin main >/dev/null 2>&1
+		_returnGITPUSH=$?
+		if [[ ! ${_returnGITPUSH} = 0 ]]; then
+			# git push failed
+			_warn "command 'git -C ${_repoLOCAL} push -u origin main' failed"
+		else
+			_info "build: push success"
+		fi
+	fi
+
+	# finally install the new dofi into the path
+	# check whether: _doINSTALL=false in which case the user
+	# has purposely requested not to install into the path
+	if [[ ! "${_doINSTALL:-}" = "false" ]]; then
+		cp "${_dofiDEV}" "${_existingDOFI}"
+		_info "installed new version to path"
+	else
+		_warn "skipping install...dofi in path is not latest"
+	fi
+	_info "dofi build complete"
+}
+
+_buildREADME () {
+	# takes one mandatory arg: full path to the README.md file
+	[[ -z "${1}" ]] && return 1
+	local _README=${1}
+	# produce a nice markdown README suitable for github
+	#  - description
+	#  - installation
+	#  - support
+	#  - usage
+	# first add the description, installation, and support info
+	cat >"${_README}" <<'EOF'
+## dofi: dotfile manager
+
+dofi takes the *git out* of bare-repo dotfile management
+- a bash script with minimal dependencies
+- automates the creation of the local dotfile repo
+- automates and assists with the creation and connection to a remote repo
+- friendly and easy introduction to dotfile management with git
+- hides complexity at the expense of brevity (intentional design)
+- attempts to be robust, clean, clear, and reusable code
+- solves a simple problem: keep my stuff safe without hassle
+
+---
+### installation options
+#### option 1: use curl
+```
+curl -O https://raw.githubusercontent.com/periplume/dofi/refs/heads/main/dofi
+chmod +x dofi
+./dofi install -h  # to view installation options
+./dofi install     # to install with all defaults
+```
+#### option 2: use wget
+```
+wget -O dofi https://raw.githubusercontent.com/periplume/dofi/refs/heads/main/dofi
+chmod +x dofi
+./dofi install -h  # to view installation options
+./dofi install     # to install with all defaults
+```
+#### option 2: use git
+```
+git clone https://github.com/periplume/dofi.git && cd dofi
+./dofi install
+```
+---
+### support
+- tested on ubuntu 24.01.01
+---
+### usage
+EOF
+# next add all the usage pages
+{ echo -e "~~~\n";																			\
+	printf "%s\n" "$(${_dofiDEV} -h)";										\
+	echo -e "~~~\n---\n~~~\n";														\
+	printf "%s\n" "$(${_dofiDEV} install -h)";						\
+	echo -e "~~~\n---\n~~~\n";														\
+	printf "%s\n" "$(${_dofiDEV} attach -h)";							\
+	echo -e "~~~\n---\n~~~\n";														\
+	printf "%s\n" "$(${_dofiDEV} status -h)";							\
+	echo -e "~~~\n---\n~~~\n";														\
+	printf "%s\n" "$(${_dofiDEV} version -h)";						\
+	echo -e "~~~\n---\n### description\n~~~\n";						\
+	printf "%s\n" "$(${_dofiDEV} -e)";										\
+	echo -e "~~~\n---\n"; } >>"${_README}"  
+}
+
+# test SSH connection function
+_testSSH () {
+	_getREPO
+	# get the ssh host from the full remote url
+	_url=${_repoLOCATION[_remote]%%:*}
+	_info "testing ssh connectivity and authentication to ${_url}"
+	ssh -T "${_url}" >/dev/null 2>&1
+	_testResult=$?
+	if [ ${_testResult} = 1 ]; then
+		_debug "ssh test to ${_url} SUCCESS with code '${_testResult}'"
+		return
+	else
+		_error "ssh test to ${_url} FAILED with error code '${_testResult}'"
+		_note "did you add the key for ${_url}?"
+		return 1
+	fi
+}
+
+_inspect () {
+  # if tig exists, use tig, otherwise, use 'git log'
+  if hash tig >/dev/null 2>&1; then
+    tig -C "${_repoLOCAL}"
+  else
+    _git -C "${_repoLOCAL}" log
+  fi
+}
+
+# run after positional parameters are processed and before subcommands
+_setEnv () {
+	# set straight the environment details
+	_selfNAME=$(basename "${BASH_SOURCE[0]}")
+	_selfABSOLUTE=$(readlink -f "${BASH_SOURCE[0]}")
+	_selfBASE=$(dirname "${_selfABSOLUTE}")
+	_selfCALL=${0}
+	_selfPWD=$(pwd)
+	_selfHOST=$(hostname)
+	_USERHOME=${HOME}
+	_USERNAME=$(whoami)
+	_DOFIHOME="${_USERHOME}/.dofi"
+	_getREPO
+	export _repoLOCAL="${_repoLOCATION[_local]}"
+	export _repoREMOTE="${_repoLOCATION[_remote]}"
+	# set _DEBUG
+	[[ ${_DEBUG:-} = "true" ]] || _DEBUG=false
+	# print the environment details in _DEBUG mode
+	_debug "$(declare -p _selfNAME)"
+	_debug "$(declare -p _selfABSOLUTE)"
+	_debug "$(declare -p _selfBASE)"
+	_debug "$(declare -p _selfCALL)"
+	_debug "$(declare -p _selfPWD)"
+	_debug "$(declare -p _selfHOST)"
+	_debug "$(declare -p _USERNAME)"
+	_debug "$(declare -p _USERHOME)"
+	_debug "$(declare -p _DOFIHOME)"
+	# print the developer settings
+	_debug "$(declare -p _repoLOCAL)"
+	_debug "$(declare -p _repoREMOTE)"
+}
+
+# the main entry point
+main () {
+	# print help if no positional parameters found
+	[[ -z ${*:-} ]] && { _printHelp; exit 0; }
+	# read the positional parameters
+	_getOpts "${@}"
+	# set the environment accordingly
+	_setEnv
+	# run the _build function
+	_build
+}
+# prevent this file from being sourced, but warn instead of panic
+(return 0 2>/dev/null) && { _error "dofi cannot be sourced"; return; }
+# run the main() function
+main "${@}"

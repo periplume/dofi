@@ -1,0 +1,34 @@
+#!/bin/bash
+
+if [[ -z $1 ]]; then
+	echo "\$1: supply user name"
+	echo "\$2: [add|remove]"
+	exit 1
+fi
+
+if [[ -z $2 ]]; then
+	echo "\$2 say 'add' or 'remove'"
+	exit 1
+fi
+
+_user=$1
+_action=$2
+
+if [[ $_action = "add" ]]; then
+ 	sudo useradd -m -s /bin/bash $_user
+	echo "added user: $_user"
+elif [[ $_action = "remove" ]]; then
+	[[ $_user = "jason" ]] && exit 1
+	sudo userdel -r $_user
+	result=$?
+	if [[ $result = 0 ]]; then
+		echo "result=$result removed user: $_user"
+	elif [[ $result = 6 ]]; then
+		echo "result=$result no such user $_user"
+	else
+		echo "result=$result problem removing $_user"
+	fi
+else
+	echo "error: nothing done"
+fi
+

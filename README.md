@@ -13,14 +13,22 @@ dofi takes the *git out* of bare-repo dotfile management
 ### installation options
 #### option 1: use curl
 ```
-curl https://raw.githubusercontent.com/periplume/dofi/refs/heads/main/dofi
+curl -O https://raw.githubusercontent.com/periplume/dofi/refs/heads/main/dofi
 chmod +x dofi
+./dofi install -h  # to view installation options
+./dofi install     # to install with all defaults
+```
+#### option 2: use wget
+```
+wget -O dofi https://raw.githubusercontent.com/periplume/dofi/refs/heads/main/dofi
+chmod +x dofi
+./dofi install -h  # to view installation options
+./dofi install     # to install with all defaults
+```
+#### option 2: use git
+```
+git clone https://github.com/periplume/dofi.git && cd dofi
 ./dofi install
-```
-#### option 2: use git to clone the dofi repo
-```
-git clone https://github.com/periplume/dofi.git
-cd dofi; ./dofi install
 ```
 ---
 ### support
