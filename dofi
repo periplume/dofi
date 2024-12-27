@@ -4,7 +4,6 @@
 # source: https://github.com/periplume/dofi.git
 # copyright (c) 2024 Jason Lindemuth <jason@bloom.us>
 # licensed under GPL-3.0-or-later
-# pre-org
 
 # STRICT ("SAFE") SCRIPT AND SHELL SETTINGS
 set -o errexit
