@@ -198,7 +198,7 @@ within the dofi.build script. i'm not a programmer myself, although i've
 been using linux for a long time. this is my first real "project", in
 other words, i am an amateur, and my approach has been to find and write
 good patterns that i can personally use and reuse. i suppose this
-project is a demonstration of reference.
+project is a demonstration of reference and inexperience.
 
 but really, this is just a wrapper for git, no more. git for non-git
 users.
